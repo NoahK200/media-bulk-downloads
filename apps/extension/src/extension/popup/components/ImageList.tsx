@@ -25,6 +25,7 @@ import { AudioIcon } from '@/extension/popup/components/icons/AudioIcon';
 import { LoadingImage } from '@/extension/popup/components/LoadingImage';
 import { SelectCheckbox } from '@/extension/popup/components/fields/SelectCheckbox';
 import { hostFromUrl, registrableDomain } from '@mbd/core/collection/paths';
+import { canonicalSrcKey } from '@mbd/core/collection/canonical';
 
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
@@ -88,7 +89,7 @@ const isIgUrl = (u: string | undefined): boolean => {
 const isPendingReel = (img: ImageInfo): boolean =>
   isPendingVideo(img) && !img.resolveHint && (isIgUrl(img.src) || isIgUrl(img.poster));
 
-const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptureAudio, onCaptureStream, audioFormat, thumbnailSize = 120, previewSize = 360, downloadedSrcs, favouriteSrcs, onToggleFavourite, onExclude, onFetchVideo, resolveFailedSrcs, fetchingSrcs, selectedSrcs, selectionActive, onToggleSelect, onSelectRange }) => {
+const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptureAudio, onCaptureStream, audioFormat, thumbnailSize = 120, previewSize = 360, downloadedSrcs, favouriteSrcs, onToggleFavourite, onExclude, onFetchVideo, sankakuSessionEnabled = true, onOpenPrivacy, resolveFailedSrcs, fetchingSrcs, selectedSrcs, selectionActive, onToggleSelect, onSelectRange }) => {
   const defaultAudioFormat: AudioFormat = audioFormat ?? 'm4a';
   const [selectedSrc, setSelectedSrc] = useState<string | null>(null);
   const selectedIndex = selectedSrc !== null ? images.findIndex((i) => i.src === selectedSrc) : -1;
@@ -111,11 +112,14 @@ const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptur
   const setHeight = (src: string, height: number | null): void =>
     setHeightBySrc((prev) => { const m = new Map(prev); if (height == null) m.delete(src); else m.set(src, height); return m; });
   const streamState = (img: ImageInfo): VariantState => variantStates.get(img.hlsManifest ?? '') ?? { status: 'idle', variants: [] };
+  const sankakuSessionBlocked = (img: ImageInfo): boolean =>
+    img.resolveHint?.platform === 'sankaku' && !sankakuSessionEnabled;
   const captureVideo = (img: ImageInfo): void =>
     (onCaptureStream ? onCaptureStream(img, heightBySrc.get(img.src)) : onImageDownload(img));
 
   const [excludeMenuOpen, setExcludeMenuOpen] = useState(false);
   const excludeMenuRef = useRef<HTMLDivElement>(null);
+  const excludeMenuButtonRef = useRef<HTMLButtonElement>(null);
   const excludeMenuListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -149,6 +153,7 @@ const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptur
       if (e.key === 'Escape') {
         e.stopPropagation();
         setExcludeMenuOpen(false);
+        excludeMenuButtonRef.current?.focus();
       }
     };
     document.addEventListener('mousedown', onPointer);
@@ -210,6 +215,11 @@ const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptur
           return (
           <figure
             key={image.src}
+            data-media-key={canonicalSrcKey(image.src)}
+            data-media-src={image.src}
+            data-media-alt={image.alt}
+            data-media-kind={image.kind}
+            data-media-pending={isPendingVideo(image) || isPendingImage(image) ? 'true' : 'false'}
             title={sourceTooltip(image)}
             className={`card reveal mbd:group mbd:m-0 ${isSelected ? 'mbd:ring-2 mbd:ring-(--brand-ink)' : ''}`}
             style={{
@@ -346,10 +356,11 @@ const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptur
                 {isPendingVideo(image) ? (
                   image.resolveHint ? (
                     <button
-                      onClick={() => onFetchVideo?.(image)}
+                      ref={excludeMenuButtonRef}
+                      onClick={() => sankakuSessionBlocked(image) ? onOpenPrivacy?.() : onFetchVideo?.(image)}
                       disabled={fetchingSrcs?.has(image.src)}
-                      title={resolveFailedSrcs?.has(image.src) ? 'Retry video' : 'Get video'}
-                      aria-label={resolveFailedSrcs?.has(image.src) ? 'Retry video' : 'Get video'}
+                      title={sankakuSessionBlocked(image) ? 'Session access disabled' : resolveFailedSrcs?.has(image.src) ? 'Retry video' : 'Get video'}
+                      aria-label={sankakuSessionBlocked(image) ? 'Session access disabled' : resolveFailedSrcs?.has(image.src) ? 'Retry video' : 'Get video'}
                       className="mbd:grid mbd:h-8 mbd:w-8 mbd:place-items-center mbd:rounded-full mbd:bg-(--brand-ink) mbd:text-white mbd:ring-1 mbd:ring-(--ctl-ring) mbd:transition-transform mbd:hover:scale-105 mbd:active:scale-95 mbd:disabled:opacity-60"
                     >
                       {fetchingSrcs?.has(image.src)
@@ -624,7 +635,16 @@ const ImageList: React.FC<ImageListProps> = ({ images, onImageDownload, onCaptur
 
             <div className="mbd:border-t hairline mbd:px-4 mbd:py-2.5">
               {isPendingVideo(selectedImage) ? (
-                selectedImage.resolveHint ? (
+                sankakuSessionBlocked(selectedImage) ? (
+                  <div className="mbd:space-y-2 mbd:text-center">
+                    <p className="mbd:text-[12px] mbd:text-(--ink-2)">
+                      Session access disabled. This preview stays available, but restricted originals need explicit local consent.
+                    </p>
+                    <button type="button" className="btn btn-ghost mbd:w-full" onClick={onOpenPrivacy}>
+                      Review privacy settings
+                    </button>
+                  </div>
+                ) : selectedImage.resolveHint ? (
                   <button
                     onClick={() => onFetchVideo?.(selectedImage)}
                     disabled={fetchingSrcs?.has(selectedImage.src)}

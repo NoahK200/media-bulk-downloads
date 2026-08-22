@@ -89,11 +89,12 @@ Deno.test('pickKnownSettings accepts a valid namingMode', () => {
   assertEquals(result.namingMode, 'original');
 });
 
-Deno.test('pickKnownSettings coerces non-boolean values for boolean fields', () => {
-  const result = pickKnownSettings(DEFAULT_DESKTOP_SETTINGS, {
+Deno.test('pickKnownSettings rejects non-boolean values for boolean fields', () => {
+  const current = { ...DEFAULT_DESKTOP_SETTINGS, skipDuplicateDownloads: true };
+  const result = pickKnownSettings(current, {
     skipDuplicateDownloads: 0 as unknown as boolean,
   });
-  assertEquals(result.skipDuplicateDownloads, false);
+  assertEquals(result.skipDuplicateDownloads, true);
 });
 
 Deno.test('deepScanClickLoadMore round-trips through the KV store', async () => {

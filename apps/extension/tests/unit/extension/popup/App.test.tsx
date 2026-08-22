@@ -3,7 +3,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '@/extension/popup/App';
-import { ImageInfo } from '@mbd/core/types';
+import { ImageInfo, MultiTabCollectionOptions } from '@mbd/core/types';
 import { deepScanActiveTab } from '@/extension/shared/active-tab/deep-scan-active-tab';
 import { requestResolveOriginals } from '@/extension/shared/active-tab/resolve-originals-active';
 import { getPageType } from '@/extension/shared/active-tab/collect-active-tab';
@@ -66,9 +66,18 @@ describe('App Component', () => {
   beforeEach(() => {
     (chrome.storage.sync.get as Mock).mockImplementation((_k, cb) => cb({}));
     (chrome.storage.sync.set as Mock).mockClear();
-    (chrome.runtime.sendMessage as Mock).mockReset();
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((message, callback) => {
+      if (typeof callback !== 'function') return;
+      if (message?.type === 'GET_PRIVACY_PREFERENCES') callback({
+        version: 1, reviewComplete: false, automaticBadgeScanning: false,
+        observeMediaRequests: false, sankakuSessionResolution: false,
+      });
+      else if (message?.type === 'GET_DOWNLOADED_SRCS') callback([]);
+      else callback({ status: 'success' });
+    });
     (buildZip as Mock).mockReset();
     (convertImage as Mock).mockReset();
+    (requestResolveOriginals as Mock).mockClear();
     global.fetch = vi.fn().mockRejectedValue(new Error('no')) as unknown as typeof fetch;
   });
 
@@ -76,6 +85,88 @@ describe('App Component', () => {
     render(<App collect={async () => []} />);
     expect(screen.getByText('Media Bulk Downloads')).toBeInTheDocument();
     await screen.findByText('No media here');
+  });
+
+  it('shows the complete collection-scope selector in popup and bubble surfaces', async () => {
+    const popup = render(<App collect={async () => []} />);
+    const popupScope = await screen.findByRole('combobox', { name: 'Collection scope' });
+    expect(popupScope).toHaveValue('active');
+    expect(screen.getByRole('option', { name: 'All tabs' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Selected tabs…' })).toBeInTheDocument();
+    await screen.findByText('No media here');
+    popup.unmount();
+
+    render(<App surface="bubble" collect={async () => []} />);
+    const bubbleScope = await screen.findByRole('combobox', { name: 'Collection scope' });
+    expect(bubbleScope).toHaveValue('active');
+    expect(screen.getByRole('option', { name: 'All tabs' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Selected tabs…' })).toBeInTheDocument();
+    await screen.findByText('No media here');
+  });
+
+  it('constrains and wraps the collection toolbar so its action buttons cannot overflow', async () => {
+    render(<App surface="bubble" collect={async () => [image({ src: 'visible.jpg' })]} />);
+    const scope = await screen.findByRole('combobox', { name: 'Collection scope' });
+    expect(scope).toHaveStyle({ width: '140px', height: '30px' });
+    expect(scope).toHaveClass('mbd:min-w-0', 'mbd:max-w-full', 'mbd:shrink');
+
+    const actions = scope.closest('.collection-toolbar-actions');
+    const toolbar = scope.closest('.collection-toolbar');
+    expect(actions).toHaveClass('mbd:flex-wrap', 'mbd:max-w-full', 'mbd:justify-end');
+    expect(toolbar).toHaveClass('mbd:flex-wrap', 'mbd:gap-y-2');
+    expect(await screen.findByRole('button', { name: 'Deep scan' })).toHaveClass('mbd:shrink-0');
+    expect(screen.getByRole('button', { name: 'Find near-duplicates' })).toHaveClass('mbd:shrink-0');
+    expect(screen.getByRole('button', { name: 'Rescan page' })).toHaveClass('mbd:shrink-0');
+  });
+
+  it('uses the injected multi-tab collector for All tabs and reports progress', async () => {
+    const collect = vi.fn(async () => [image({ src: 'active.jpg' })]);
+    const collectTabs = vi.fn(async (options?: MultiTabCollectionOptions) => {
+      options?.onProgress?.(1, 2);
+      options?.onProgress?.(2, 2);
+      return {
+        items: [image({ src: 'one.jpg' }), image({ src: 'two.jpg' })],
+        scanned: 2,
+        skipped: 0,
+      };
+    });
+    render(<App surface="bubble" collect={collect} collectTabs={collectTabs} />);
+    const scope = await screen.findByRole('combobox', { name: 'Collection scope' });
+    await userEvent.selectOptions(scope, 'all-tabs');
+
+    await waitFor(() => expect(collectTabs).toHaveBeenCalledTimes(1));
+    expect(collect).toHaveBeenCalledTimes(1);
+    expect(collectTabs.mock.calls[0][0]).toEqual(expect.objectContaining({ tabIds: undefined }));
+    expect(await screen.findByText(/2 tabs/)).toBeInTheDocument();
+  });
+
+  it('uses the injected tab loader and scans only confirmed selected tabs', async () => {
+    const collectTabs = vi.fn(async (_options?: MultiTabCollectionOptions) => {
+      void _options;
+      return { items: [image({ src: 'selected.jpg' })], scanned: 1, skipped: 0 };
+    });
+    const loadTabs = vi.fn(async () => [
+      { id: 7, title: 'Alpha tab', url: 'https://alpha.example/' },
+      { id: 8, title: 'Beta tab', url: 'https://beta.example/' },
+    ]);
+    render(
+      <App
+        surface="bubble"
+        collect={async () => []}
+        collectTabs={collectTabs}
+        loadTabs={loadTabs}
+      />,
+    );
+    const scope = await screen.findByRole('combobox', { name: 'Collection scope' });
+    await userEvent.selectOptions(scope, 'selected');
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Scan tab: Beta tab' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Scan selected (1)' }));
+
+    await waitFor(() => expect(collectTabs).toHaveBeenCalledTimes(1));
+    expect(loadTabs).toHaveBeenCalledTimes(1);
+    expect(collectTabs.mock.calls[0][0]).toEqual(expect.objectContaining({ tabIds: [8] }));
+    expect(screen.getByRole('combobox', { name: 'Collection scope' })).toHaveValue('selected');
+    expect(screen.getByRole('option', { name: 'Selected (1)' })).toBeInTheDocument();
   });
 
   it('shows the scanning state initially', async () => {
@@ -269,6 +360,7 @@ describe('App Component', () => {
   });
 
   it('lazily enriches remote image sizes after load', async () => {
+    (chrome.storage.sync.get as Mock).mockImplementation((_k, cb) => cb({ settings: { resolveOriginals: true } }));
     global.fetch = vi.fn().mockResolvedValue({
       headers: { get: () => '2048' },
     }) as unknown as typeof fetch;
@@ -280,6 +372,7 @@ describe('App Component', () => {
   });
 
   it('never fetches a pending image\'s placeholder src during size enrichment', async () => {
+    (chrome.storage.sync.get as Mock).mockImplementation((_k, cb) => cb({ settings: { resolveOriginals: true } }));
     const fetchSpy = vi.fn().mockResolvedValue({ headers: { get: () => '2048' } });
     global.fetch = fetchSpy as unknown as typeof fetch;
 
@@ -314,11 +407,12 @@ describe('App Component', () => {
 
     fireEvent.click(screen.getByTitle('Settings'));
     fireEvent.click(screen.getByRole('tab', { name: /Display/i }));
-    fireEvent.click(screen.getByRole('switch', { name: /show image count/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /show floating bubble/i }));
     fireEvent.click(screen.getByText('Save'));
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'SET_SETTINGS', patch: expect.objectContaining({ showImageCount: false }) }),
+      expect.objectContaining({ type: 'SET_SETTINGS', patch: expect.objectContaining({ bubbleEnabled: true }) }),
+      expect.any(Function),
     );
   });
 
@@ -361,7 +455,7 @@ describe('App Component', () => {
 
     fireEvent.click(screen.getByTitle('Settings'));
     fireEvent.click(screen.getByRole('tab', { name: /Display/i }));
-    fireEvent.click(screen.getByRole('switch', { name: /show image count/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /show floating bubble/i }));
     fireEvent.click(screen.getByText('Save'));
     const call = (chrome.runtime.sendMessage as Mock).mock.calls.find((c) => c[0]?.type === 'SET_SETTINGS');
     expect(call?.[0].patch).toEqual(expect.objectContaining({ bubbleWidth: 600, bubbleHeight: 700 }));
@@ -508,7 +602,7 @@ describe('App Component', () => {
     expect(resolveMock).toHaveBeenCalledWith([
       { src: 'poster1.jpg', hint: { platform: 'twitter', id: '1' } },
       { src: 'poster2.jpg', hint: { platform: 'twitter', id: '2' } },
-    ]);
+    ], []);
 
     await waitFor(() => expect(screen.getByRole('button', { name: /download 2/i })).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /get all videos/i })).not.toBeInTheDocument();
@@ -619,7 +713,7 @@ describe('App Component', () => {
     render(<App collect={async () => [pendingVideo]} />);
     fireEvent.click(await screen.findByTitle('Get video'));
     await waitFor(() =>
-      expect(requestResolveOriginals).toHaveBeenCalledWith([{ src: 'poster.jpg', hint: { platform: 'twitter', id: '123' } }]),
+      expect(requestResolveOriginals).toHaveBeenCalledWith([{ src: 'poster.jpg', hint: { platform: 'twitter', id: '123' } }], []),
     );
     expect(await screen.findByRole('button', { name: /download 1/i })).toBeInTheDocument();
   });
@@ -658,7 +752,7 @@ describe('App Component', () => {
 
     fireEvent.click(await screen.findByTitle('Get video'));
     await waitFor(() =>
-      expect(requestResolveOriginals).toHaveBeenCalledWith([{ src: 'poster.jpg', hint: { platform: 'twitter', id: '123' } }]),
+      expect(requestResolveOriginals).toHaveBeenCalledWith([{ src: 'poster.jpg', hint: { platform: 'twitter', id: '123' } }], []),
     );
     expect(await screen.findByRole('button', { name: /download 1/i })).toBeInTheDocument();
 
@@ -684,6 +778,7 @@ describe('App Component', () => {
         type: 'ADD_EXCLUDED',
         entry: expect.objectContaining({ value: 'https://cdn.ads.com/a.png', kind: 'url', time: expect.any(Number) }),
       }),
+      expect.any(Function),
     );
     await waitFor(() => expect(screen.queryByTitle('Exclude source')).toBeNull());
   });
@@ -702,6 +797,7 @@ describe('App Component', () => {
         type: 'ADD_EXCLUDED',
         entry: expect.objectContaining({ value: 'ads.com', kind: 'host', time: expect.any(Number) }),
       }),
+      expect.any(Function),
     );
   });
 
@@ -726,12 +822,14 @@ describe('App Component', () => {
         type: 'ADD_EXCLUDED',
         entry: expect.objectContaining({ value: 'a.jpg', kind: 'url', time: expect.any(Number) }),
       }),
+      expect.any(Function),
     );
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'ADD_EXCLUDED',
         entry: expect.objectContaining({ value: 'b.jpg', kind: 'url', time: expect.any(Number) }),
       }),
+      expect.any(Function),
     );
     expect(
       (chrome.runtime.sendMessage as Mock).mock.calls.filter((c) => c[0]?.type === 'ADD_EXCLUDED'),
@@ -1029,6 +1127,7 @@ describe('App Component', () => {
     await waitFor(() =>
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'ADD_FAVOURITE', entry: expect.objectContaining({ src: 'fav.jpg', kind: 'image' }) }),
+        expect.any(Function),
       ),
     );
     const removeBtn = await screen.findByRole('button', { name: /remove favourite/i });
@@ -1038,6 +1137,7 @@ describe('App Component', () => {
     await waitFor(() =>
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'REMOVE_FAVOURITE', src: 'fav.jpg' }),
+        expect.any(Function),
       ),
     );
     expect(await screen.findByRole('button', { name: /add favourite/i })).toBeInTheDocument();
@@ -1519,11 +1619,13 @@ describe('App Component', () => {
           type: 'ADD_FAVOURITE',
           entry: expect.objectContaining({ src: 'v.mp4', thumbnailSrc: 'https://c/p.jpg', sourcePageTitle: 'My Page' }),
         }),
+        expect.any(Function),
       ),
     );
   });
 
   it('enriches only the remote image lacking a size, leaving the known one intact', async () => {
+    (chrome.storage.sync.get as Mock).mockImplementation((_k, cb) => cb({ settings: { resolveOriginals: true } }));
     global.fetch = vi.fn().mockResolvedValue({ headers: { get: () => '4096' } }) as unknown as typeof fetch;
     render(<App collect={async () => [image({ src: 'known.jpg', fileSize: 1024 }), image({ src: 'https://cdn.example.com/remote.jpg', fileSize: 0 })]} />);
     await screen.findByText('Filters');

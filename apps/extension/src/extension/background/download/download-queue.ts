@@ -8,7 +8,7 @@ import { recordDownloads } from '@mbd/storage/history';
 import { applyRefererRule, removeRefererRule, hasDnrPermission } from '@/extension/background/download/hotlink-rewrite';
 import { scheduleSidecar } from '@/extension/background/download/sidecar-writer';
 import { platform } from '@/extension/platform';
-import type { DownloadRecord } from '@mbd/platform';
+import type { DownloadRecord, DownloadStartResult } from '@mbd/platform';
 
 /** The subset of a download state-change the queue reacts to (the platform
  *  Downloader's onChanged payload). */
@@ -22,15 +22,22 @@ interface Deps {
 let deps: Deps = { getConcurrency: () => 5, getSaveAs: () => false };
 
 let chain: Promise<unknown> = Promise.resolve();
+export class QueuePersistenceError extends Error {
+  code: string;
+  constructor(code: string) {
+    super(`Download queue could not be saved (${code}).`);
+    this.name = 'QueuePersistenceError';
+    this.code = code;
+  }
+}
+
 function withState<T>(fn: (s: QueueState) => Promise<{ state: QueueState; value: T }>): Promise<T> {
   const run = chain.then(async () => {
     const s = await loadQueue();
     const { state, value } = await fn(s);
     if (state !== s) {
       const persisted = await saveQueue(state);
-      if (!persisted) {
-        console.warn('[mbd] download queue exceeded the storage quota; pending items may not survive a service-worker restart.');
-      }
+      if (!persisted.ok) throw new QueuePersistenceError(persisted.code);
     }
     return value;
   });
@@ -38,7 +45,7 @@ function withState<T>(fn: (s: QueueState) => Promise<{ state: QueueState; value:
   return run;
 }
 
-function startDownload(url: string, filename: string): Promise<number | undefined> {
+function startDownload(url: string, filename: string): Promise<DownloadStartResult> {
   return platform.downloader.download({ url, filename, saveAs: deps.getSaveAs(), conflictAction: 'uniquify' });
 }
 
@@ -81,14 +88,25 @@ export async function pump(): Promise<void> {
         ruleId = undefined;
       }
     }
-    const downloadId = await startDownload(claimed.url, claimed.filename);
-    if (downloadId === undefined) {
+    const started = await startDownload(claimed.url, claimed.filename);
+    if (started.kind === 'failed') {
       if (ruleId != null) await removeRefererRule(ruleId);
       await withState(async (s) => ({
         state: scheduleRetry({ ...s, items: s.items.map((i) => (i.id === claimed.id ? { ...i, ruleId: undefined } : i)) }, claimed.id, Date.now()),
         value: null,
       }));
+    } else if (started.kind === 'untracked') {
+      const done = await withState(async (s) => {
+        const current = s.items.find((item) => item.id === claimed.id && item.status === 'active');
+        return current
+          ? { state: markDone(s, claimed.id), value: current }
+          : { state: s, value: null };
+      });
+      if (done?.history) void recordDownloads([{ ...done.history, time: Date.now() }]);
+      // Safari has no observable download id, completion event, sidecar path, or
+      // cancellation API. Treat the accepted anchor dispatch as terminal.
     } else {
+      const downloadId = started.id;
       if (claimed.sidecar) scheduleSidecar(downloadId, claimed.filename, claimed.sidecar);
       await withState(async (s) => ({ state: markActive(s, claimed.id, downloadId), value: null }));
       ensureProgressPoll();
@@ -279,6 +297,26 @@ export async function reconcileQueue(): Promise<void> {
     snapshot = await loadQueue();
   } catch {
     return;
+  }
+  if ((import.meta.env.BROWSER as string) === 'safari') {
+    const legacy = snapshot.items.some((item) => item.status === 'active' && item.downloadId === 1);
+    if (legacy) {
+      await withState(async (state) => ({
+        state: {
+          ...state,
+          items: state.items.map((item) => item.status === 'active' && item.downloadId === 1
+            ? {
+                ...item,
+                status: 'failed' as const,
+                error: 'Previous Safari transfer status unknown',
+                downloadId: undefined,
+              }
+            : item),
+        },
+        value: null,
+      }));
+      snapshot = await loadQueue();
+    }
   }
   const now = Date.now();
 

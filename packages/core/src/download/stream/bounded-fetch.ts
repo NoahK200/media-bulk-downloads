@@ -1,4 +1,4 @@
-import { STREAM_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
+import { RESPONSE_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 
 /**
  * Reading a capture fetch's body incrementally with a hard byte ceiling, so a
@@ -23,7 +23,7 @@ export class StreamTooLargeError extends Error {
  * mid-flight; falls back to `arrayBuffer()` (still size-checked) when the body is
  * not a readable stream (a mocked fetch, or an engine without streaming bodies).
  */
-export async function readBounded(res: Response, max = STREAM_MAX_BYTES): Promise<Uint8Array> {
+export async function readBounded(res: Response, max = RESPONSE_MAX_BYTES): Promise<Uint8Array> {
   const body = res.body as ReadableStream<Uint8Array> | null;
   if (!body || typeof body.getReader !== 'function') {
     const bytes = new Uint8Array(await res.arrayBuffer());
@@ -61,7 +61,7 @@ export async function readBounded(res: Response, max = STREAM_MAX_BYTES): Promis
  *  A degenerate Response with neither a streamable body nor `arrayBuffer` (only
  *  `text()`) can't be size-bounded; a real fetch Response always has `arrayBuffer`,
  *  so this fallback never disables the ceiling in production. */
-export async function readBoundedText(res: Response, max = STREAM_MAX_BYTES): Promise<string> {
+export async function readBoundedText(res: Response, max = RESPONSE_MAX_BYTES): Promise<string> {
   const body = res.body as ReadableStream<Uint8Array> | null;
   const streamable = body && typeof body.getReader === 'function';
   if (!streamable && typeof res.arrayBuffer !== 'function') return res.text();

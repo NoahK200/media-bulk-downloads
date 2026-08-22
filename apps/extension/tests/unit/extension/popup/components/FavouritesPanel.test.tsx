@@ -18,7 +18,7 @@ const lastStorageListener = (): ChangeListener => {
 describe('FavouritesPanel', () => {
   beforeEach(() => {
     vi.spyOn(favourites, 'loadFavourites').mockResolvedValue([entry]);
-    (chrome.runtime.sendMessage as Mock).mockClear();
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((_message, callback) => callback?.({ status: 'success' }));
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -29,14 +29,14 @@ describe('FavouritesPanel', () => {
     await userEvent.click(clearBtn);
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith({ type: 'CLEAR_FAVOURITES' });
     await userEvent.click(clearBtn);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CLEAR_FAVOURITES' });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CLEAR_FAVOURITES' }, expect.any(Function));
   });
 
   it('removes an entry via the background', async () => {
     render(<FavouritesPanel onClose={() => {}} />);
     await screen.findByText('a.jpg');
     await userEvent.click(screen.getByRole('button', { name: /^remove$/i }));
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'REMOVE_FAVOURITE', src: 'https://c/a.jpg' });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'REMOVE_FAVOURITE', src: 'https://c/a.jpg' }, expect.any(Function));
   });
 
   it('downloads an entry through the download flow', async () => {

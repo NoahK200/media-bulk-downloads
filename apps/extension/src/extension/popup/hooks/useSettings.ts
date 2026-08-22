@@ -1,13 +1,12 @@
 import { Dispatch, RefObject, SetStateAction, useEffect, useRef, useState } from 'react';
-import { SettingsData } from '@mbd/core/types';
+import { MutationResponse, SettingsData } from '@mbd/core/types';
 import { DEFAULT_SETTINGS, withDefaults, loadStoredSettings } from '@mbd/storage/settings';
-import { sendRuntimeMessage } from '@/extension/popup/utils';
 
 export interface UseSettingsResult {
   settings: SettingsData;
   setSettings: Dispatch<SetStateAction<SettingsData>>;
   settingsRef: RefObject<SettingsData>;
-  handleSettingsChange: (newSettings: SettingsData) => void;
+  handleSettingsChange: (newSettings: SettingsData) => Promise<MutationResponse>;
 }
 
 /**
@@ -46,15 +45,22 @@ export function useSettings(): UseSettingsResult {
     return () => chrome.storage.onChanged.removeListener(listener);
   }, []);
 
-  const handleSettingsChange = (newSettings: SettingsData) => {
-    setSettings(newSettings);
+  const handleSettingsChange = (newSettings: SettingsData): Promise<MutationResponse> => new Promise((resolve) => {
     const { bubblePosition, bubblePanelPoint, ...rest } = newSettings;
     void bubblePanelPoint;
-    sendRuntimeMessage({
-      type: 'SET_SETTINGS',
-      patch: { ...rest, bubblePosition: { corner: bubblePosition.corner } },
-    });
-  };
+    chrome.runtime.sendMessage(
+      { type: 'SET_SETTINGS', patch: { ...rest, bubblePosition: { corner: bubblePosition.corner } } },
+      (response?: MutationResponse) => {
+        const error = chrome.runtime.lastError;
+        if (error || !response) {
+          resolve({ status: 'error', code: 'runtime-error', message: error?.message || 'Settings were not saved.' });
+          return;
+        }
+        if (response.status === 'success') setSettings(newSettings);
+        resolve(response);
+      },
+    );
+  });
 
   return { settings, setSettings, settingsRef, handleSettingsChange };
 }

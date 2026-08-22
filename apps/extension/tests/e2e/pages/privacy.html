@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Privacy runtime fixture</title>
+    <script>
+      window.__mbdNativeFetch = window.fetch;
+      window.__mbdNativeXhrOpen = XMLHttpRequest.prototype.open;
+      window.__mbdHlsEvents = 0;
+      window.addEventListener('message', (event) => {
+        if (event.source === window && event.data?.source === 'mbd-hls') window.__mbdHlsEvents++;
+      });
+    </script>
+    <link rel="stylesheet" href="/cdn/shop/theme.css">
+  </head>
+  <body>
+    <img src="/media.png" alt="privacy fixture" width="640" height="480">
+  </body>
+</html>

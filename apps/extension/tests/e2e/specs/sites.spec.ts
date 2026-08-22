@@ -6,7 +6,7 @@ const PORT = Number(process.env.E2E_PORT) || 5199;
 const X_ORIGIN = 'https://x.com';
 
 const figureWithSrc = (page: Page, part: string) =>
-  page.locator('figure', { has: page.locator(`img[src*="${part}"]`) });
+  page.locator(`figure[data-media-src*="${part}"]`);
 const previewModal = (page: Page) => page.locator('[role="dialog"][aria-modal="true"]');
 
 /**
@@ -22,6 +22,8 @@ async function openXPage(context: BrowserContext, htmlFile: string): Promise<Pag
   await worker.evaluate(
     () => new Promise<void>((resolve) => chrome.storage.sync.set({ settings: { bubbleEnabled: true } }, () => resolve())),
   );
+  await expect.poll(() => worker.evaluate(async () =>
+    (await chrome.scripting.getRegisteredContentScripts()).map((script) => script.id))).toContain('mbd-bubble');
   const page = await context.newPage();
   await page.route(`${X_ORIGIN}/**`, async (route) => {
     const res = await fetch(`http://localhost:${PORT}/${htmlFile}`);
@@ -49,10 +51,11 @@ test.describe('realistic sites', () => {
     await page.getByRole('button', { name: 'Video', exact: true }).click();
     expect(await itemCount(page)).toBe(3);
     await expect(figureWithSrc(page, 'ext_tw_video_thumb')).toHaveCount(1);
-    await expect(figureWithSrc(page, 'tweet_video_thumb')).toHaveCount(1);
+    await expect(figureWithSrc(page, 'tweet_video/GifThumbAAA.mp4')).toHaveCount(1);
     await page.getByRole('button', { name: 'All', exact: true }).click();
 
-    const pendingTiles = page.locator('figure').filter({ hasNot: page.locator('img') });
+    await expect(page.locator('figure[data-media-pending="true"]')).toHaveCount(3);
+    const pendingTiles = page.locator('figure[data-media-pending="true"][data-media-src*="/status/"]');
     await expect(pendingTiles).toHaveCount(2);
     await expect(pendingTiles.getByRole('button', { name: 'Download' })).toHaveCount(0);
     await expect(pendingTiles.getByRole('button', { name: 'Get video' })).toHaveCount(1);
@@ -65,7 +68,7 @@ test.describe('realistic sites', () => {
     await openPanel(page);
     expect(await itemCount(page)).toBe(2);
     await expect(figureWithSrc(page, 'IG_A_1080')).toHaveCount(1);
-    await expect(figureWithSrc(page, 'IG_REEL_POSTER')).toHaveCount(1);
+    await expect(figureWithSrc(page, 'IG_REEL.mp4')).toHaveCount(1);
     await expect(figureWithSrc(page, 'IG_A_THUMB')).toHaveCount(0);
   });
 
@@ -74,7 +77,7 @@ test.describe('realistic sites', () => {
     await openPanel(page);
     await page.getByRole('button', { name: 'Video', exact: true }).click();
     expect(await itemCount(page)).toBe(1);
-    await expect(figureWithSrc(page, 'IG_REEL_POSTER')).toHaveCount(1);
+    await expect(figureWithSrc(page, 'IG_REEL.mp4')).toHaveCount(1);
   });
 
   test('Instagram: favourite the post and see it in the Favourites panel', async ({ context }) => {
@@ -105,8 +108,8 @@ test.describe('realistic sites', () => {
     await expect(figureWithSrc(page, 'pic-2x.webp')).toHaveCount(1);
     await expect(figureWithSrc(page, 'lazy-original')).toHaveCount(1);
     await expect(figureWithSrc(page, 'backdrop')).toHaveCount(1);
-    await expect(figureWithSrc(page, '120px-Example')).toHaveCount(1);
-    await expect(figureWithSrc(page, 'shirt_400x400')).toHaveCount(1);
+    await expect(figureWithSrc(page, '/commons/a/ab/Example.jpg')).toHaveCount(1);
+    await expect(figureWithSrc(page, '/products/shirt.jpg')).toHaveCount(1);
     await expect(figureWithSrc(page, 'redd.it')).not.toHaveCount(0);
     expect(await itemCount(page)).toBeGreaterThanOrEqual(8);
   });
@@ -169,8 +172,8 @@ test.describe('realistic sites', () => {
     const page = await openBubblePage(context, '/wallhaven.html');
     await openPanel(page);
     expect(await itemCount(page)).toBe(2);
-    await expect(figureWithSrc(page, 'lg/ee/ee9k7d')).toHaveCount(1);
-    await expect(figureWithSrc(page, 'lg/ab/ab3x2m')).toHaveCount(1);
+    await expect(figureWithSrc(page, 'full/ee/wallhaven-ee9k7d.jpg')).toHaveCount(1);
+    await expect(figureWithSrc(page, 'full/ab/wallhaven-ab3x2m.png')).toHaveCount(1);
   });
 
   test('Behance: upgrades the /disp/ render to the max-size /source/ original', async ({ context }) => {

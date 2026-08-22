@@ -30,12 +30,6 @@ const DisplayPane: React.FC<SettingsPaneProps> = ({
       onBlur={clampOnBlur('thumbnailSize', 64, 240)}
     />
     <ToggleRow
-      id="set-showImageCount"
-      label="Show image count on toolbar icon"
-      checked={settings.showImageCount}
-      onToggle={() => toggle('showImageCount')}
-    />
-    <ToggleRow
       id="set-bubbleEnabled"
       label="Show floating bubble on pages"
       checked={settings.bubbleEnabled}

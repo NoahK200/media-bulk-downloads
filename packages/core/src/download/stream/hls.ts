@@ -32,6 +32,8 @@
 import { muxTracks, muxAudioOnly } from '@mbd/core/download/stream/mux';
 import { assertSafeCaptureUrl } from '@mbd/core/download/stream/ssrf-guard';
 import { StreamTooLargeError } from '@mbd/core/download/stream/bounded-fetch';
+import { MEMORY_CAPTURE_MAX_BYTES, PREFETCH_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
+import type { CaptureArtifact, CaptureSink } from '@mbd/core/types';
 
 export type HlsErrorCode =
   | 'no-variants'
@@ -43,6 +45,9 @@ export type HlsErrorCode =
   | 'audio-unavailable'
   | 'empty'
   | 'too-large'
+  | 'memory-limit'
+  | 'response-too-large'
+  | 'insufficient-storage'
   | 'fetch-failed';
 
 export class HlsError extends Error {
@@ -125,10 +130,15 @@ export interface HlsCaptureOptions {
    *  separate audio rendition) is supported — a single-muxed variant (MPEG-TS or
    *  audio inside the video fMP4) has no separable track and is refused. */
   audioOnly?: boolean;
+  /** Optional ordered sink for direct-concatenation streams. Demux/mux paths
+   * remain memory-backed and leave this sink untouched. */
+  sink?: CaptureSink;
 }
 
 export interface HlsCaptureResult {
+  /** Empty only when artifact carries the file-backed output. */
   bytes: Uint8Array;
+  artifact?: CaptureArtifact;
   ext: 'ts' | 'mp4' | 'aac' | 'm4a';
   mime: string;
   variant?: HlsVariant;
@@ -422,7 +432,7 @@ async function fetchTrack(
       return await deps.fetchBytes(uri, range);
     } catch (e) {
       if (e instanceof HlsError) throw e;
-      if (e instanceof StreamTooLargeError) throw new HlsError('too-large', e.message);
+      if (e instanceof StreamTooLargeError) throw new HlsError('response-too-large', e.message);
       throw new HlsError('fetch-failed', e instanceof Error ? e.message : `Could not fetch ${uri}.`);
     }
   };
@@ -487,6 +497,87 @@ async function fetchTrack(
   return { init, segments: parts };
 }
 
+/** Ordered, memory-bounded direct-track writer. Mux-heavy paths continue to use
+ * fetchTrack because mp4box currently needs random access to both tracks. */
+async function writeTrackToSink(
+  playlist: HlsMediaPlaylist,
+  deps: HlsDeps,
+  onSegment: () => void,
+  budget: FetchBudget,
+  sink: CaptureSink,
+): Promise<void> {
+  const fetchBytesOrFail = async (uri: string, range?: HlsByteRange): Promise<Uint8Array> => {
+    try { return await deps.fetchBytes(uri, range); }
+    catch (error) {
+      if (error instanceof HlsError) throw error;
+      if (error instanceof StreamTooLargeError) throw new HlsError('response-too-large', error.message);
+      throw new HlsError('fetch-failed', error instanceof Error ? error.message : 'A stream response could not be fetched.');
+    }
+  };
+  const keys = new Map<string, Uint8Array>();
+  const decryptSegment = async (segment: HlsSegment): Promise<Uint8Array> => {
+    const raw = await fetchBytesOrFail(segment.uri, segment.byteRange);
+    if (!segment.key || segment.key.method !== 'AES-128' || !segment.key.uri) return raw;
+    let key = keys.get(segment.key.uri);
+    if (!key) {
+      key = await fetchBytesOrFail(segment.key.uri);
+      if (key.length !== 16) throw new HlsError('fetch-failed', 'AES-128 key was not 16 bytes.');
+      keys.set(segment.key.uri, key);
+    }
+    return deps.decrypt(key, segment.key.iv ?? ivFromSequence(segment.seq), raw);
+  };
+  const write = async (bytes: Uint8Array): Promise<void> => {
+    budget.used += bytes.byteLength;
+    if ((budget.max && budget.used > budget.max) || budget.used > sink.limit) {
+      throw new HlsError('too-large', 'Stream exceeds the file-backed capture limit.');
+    }
+    try { await sink.write(bytes); }
+    catch (error) {
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        throw new HlsError('insufficient-storage', 'Temporary storage quota was exhausted.');
+      }
+      if (error instanceof Error && error.message === 'memory-limit') {
+        throw new HlsError('memory-limit', error.message);
+      }
+      throw error;
+    }
+  };
+  if (playlist.initUri) await write(await fetchBytesOrFail(playlist.initUri, playlist.initByteRange));
+  if (!playlist.segments.length) return;
+
+  // Fetch the first segment before sizing the prefetch window. HLS segment
+  // sizes are normally stable within a rendition; deriving the window from an
+  // observed segment keeps the completed, out-of-order buffer near 64 MiB while
+  // still allowing up to four network requests to overlap. Every response also
+  // has the independent 64 MiB hard ceiling enforced by browserHlsDeps.
+  const first = await decryptSegment(playlist.segments[0]);
+  await write(first);
+  onSegment();
+  const byBuffer = Math.max(1, Math.floor(PREFETCH_MAX_BYTES / Math.max(1, first.byteLength)));
+  const concurrency = Math.min(4, Math.max(1, deps.concurrency ?? 4), byBuffer);
+  const pending = new Map<number, Promise<Uint8Array>>();
+  let nextLaunch = 1;
+  const launch = (): void => {
+    while (pending.size < concurrency && nextLaunch < playlist.segments.length) {
+      const index = nextLaunch++;
+      const task = decryptSegment(playlist.segments[index]);
+      // A later segment can fail before the ordered writer reaches it. Attach a
+      // rejection observer immediately; awaiting the original task below still
+      // propagates the typed failure at the correct sequence position.
+      void task.catch(() => undefined);
+      pending.set(index, task);
+    }
+  };
+  launch();
+  for (let index = 1; index < playlist.segments.length; index++) {
+    const bytes = await pending.get(index)!;
+    pending.delete(index);
+    await write(bytes);
+    onSegment();
+    launch();
+  }
+}
+
 /**
  * Full capture: master/media URL → assembled file bytes. Fetches the media
  * playlist (resolving a master first), refuses live/DRM, then downloads the init
@@ -499,6 +590,10 @@ export async function captureHls(
   deps: HlsDeps,
   opts: HlsCaptureOptions = {},
 ): Promise<HlsCaptureResult> {
+  // A direct OPFS sink may carry 2 GiB, but every demux/mux branch below still
+  // materializes tracks for mp4box and must retain the independent 256 MiB
+  // working-memory ceiling.
+  const memoryMaxBytes = Math.min(opts.maxBytes ?? MEMORY_CAPTURE_MAX_BYTES, MEMORY_CAPTURE_MAX_BYTES);
   const gd: HlsDeps = {
     ...deps,
     fetchText: (u) => (assertSafeCaptureUrl(u), deps.fetchText(u)),
@@ -536,12 +631,16 @@ export async function captureHls(
     const totalA = audioPlaylist.segments.length;
     let doneA = 0;
     const onSegmentA = (): void => deps.onProgress?.(++doneA, totalA);
-    const budgetA: FetchBudget = { used: 0, max: opts.maxBytes };
+    const budgetA: FetchBudget = { used: 0, max: memoryMaxBytes };
     const audioTrack = await fetchTrack(audioPlaylist, gd, onSegmentA, budgetA);
     let m4a: Uint8Array;
     try {
+      if (budgetA.used * 3 > memoryMaxBytes) {
+        throw new HlsError('memory-limit', 'Muxing this stream would exceed the memory safety limit.');
+      }
       m4a = muxAudioOnly({ init: audioTrack.init!, segments: audioTrack.segments });
-    } catch {
+    } catch (error) {
+      if (error instanceof HlsError) throw error;
       throw new HlsError('demuxed-unsupported', 'Could not extract this stream’s audio track.');
     }
     if (!m4a.length) throw new HlsError('empty', 'Nothing was downloaded from the stream.');
@@ -571,18 +670,22 @@ export async function captureHls(
     const totalSegs = playlist.segments.length + audioPlaylist.segments.length;
     let doneSegs = 0;
     const onSegment = (): void => deps.onProgress?.(++doneSegs, totalSegs);
-    const budget: FetchBudget = { used: 0, max: opts.maxBytes };
+    const budget: FetchBudget = { used: 0, max: memoryMaxBytes };
 
     const videoTrack = await fetchTrack(playlist, gd, onSegment, budget);
     const audioTrack = await fetchTrack(audioPlaylist, gd, onSegment, budget);
 
     let muxed: Uint8Array;
     try {
+      if (budget.used * 3 > memoryMaxBytes) {
+        throw new HlsError('memory-limit', 'Muxing this stream would exceed the memory safety limit.');
+      }
       muxed = muxTracks(
         { init: videoTrack.init!, segments: videoTrack.segments },
         { init: audioTrack.init!, segments: audioTrack.segments },
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof HlsError) throw error;
       throw new HlsError('demuxed-unsupported', 'Could not combine this stream’s audio and video.');
     }
     if (!muxed.length) throw new HlsError('empty', 'Nothing was downloaded from the stream.');
@@ -602,11 +705,37 @@ export async function captureHls(
   const total = playlist.segments.length;
   let done = 0;
   const onSegment = (): void => deps.onProgress?.(++done, total);
-  const budget: FetchBudget = { used: 0, max: opts.maxBytes };
+  const budget: FetchBudget = { used: 0, max: opts.sink ? opts.maxBytes : memoryMaxBytes };
+
+  if (opts.sink) {
+    try {
+      await writeTrackToSink(playlist, gd, onSegment, budget, opts.sink);
+      const artifact = await opts.sink.finalize(MIME[ext], ext);
+      return {
+        bytes: new Uint8Array(),
+        artifact,
+        ext,
+        mime: MIME[ext],
+        variant,
+        segmentCount: total,
+        durationSec: Math.round(playlist.totalDuration),
+      };
+    } catch (error) {
+      await opts.sink.abort();
+      if (error instanceof HlsError) throw error;
+      if (error instanceof Error && error.message === 'insufficient-storage') {
+        throw new HlsError('insufficient-storage', error.message);
+      }
+      throw new HlsError('fetch-failed', error instanceof Error ? error.message : 'File-backed capture failed.');
+    }
+  }
 
   const track = await fetchTrack(playlist, gd, onSegment, budget);
   const chunks: Uint8Array[] = track.init ? [track.init] : [];
   for (const seg of track.segments) chunks.push(seg);
+  if (budget.used * 2 > memoryMaxBytes) {
+    throw new HlsError('memory-limit', 'Assembling this stream would exceed the memory safety limit.');
+  }
   const bytes = concat(chunks);
   if (!bytes.length) throw new HlsError('empty', 'Nothing was downloaded from the stream.');
 

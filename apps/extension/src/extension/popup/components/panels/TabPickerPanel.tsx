@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { XMarkIcon, GlobeAltIcon } from '@heroicons/react/24/outline';
-import { listOpenTabs, OpenTabInfo } from '@/extension/shared/active-tab/collect-open-tabs';
+import { listOpenTabs } from '@/extension/shared/active-tab/collect-open-tabs';
+import type { OpenTabInfo } from '@mbd/core/types';
 import { useDialog } from '@/extension/popup/hooks/useDialog';
 
 export interface TabPickerPanelProps {
@@ -30,13 +31,20 @@ const safeHost = (url: string): string => {
 const TabPickerPanel: React.FC<TabPickerPanelProps> = ({ onClose, onConfirm, initialSelected = [], loadTabs = listOpenTabs }) => {
   const panelRef = useDialog(onClose);
   const [tabs, setTabs] = useState<OpenTabInfo[] | null>(null);
+  const [loadError, setLoadError] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set(initialSelected));
 
   useEffect(() => {
-    void loadTabs().then((list) => {
-      setTabs(list);
-      setSelected((prev) => new Set([...prev].filter((id) => list.some((t) => t.id === id))));
-    });
+    void loadTabs().then(
+      (list) => {
+        setTabs(list);
+        setSelected((prev) => new Set([...prev].filter((id) => list.some((t) => t.id === id))));
+      },
+      (error: unknown) => {
+        setLoadError(error instanceof Error ? error.message : 'Open tabs could not be listed.');
+        setTabs([]);
+      },
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -83,6 +91,8 @@ const TabPickerPanel: React.FC<TabPickerPanelProps> = ({ onClose, onConfirm, ini
         <div className="scroll-thin mbd:flex-1 mbd:space-y-1.5 mbd:overflow-y-auto mbd:px-4 mbd:py-4">
           {tabs === null ? (
             <p className="mbd:py-8 mbd:text-center mbd:text-[12px] mbd:text-(--ink-2)">Loading tabs…</p>
+          ) : loadError ? (
+            <p role="alert" className="mbd:py-8 mbd:text-center mbd:text-[12px] mbd:text-(--danger)">{loadError}</p>
           ) : tabs.length === 0 ? (
             <p className="mbd:py-8 mbd:text-center mbd:text-[12px] mbd:text-(--ink-2)">No scannable tabs in this window</p>
           ) : (

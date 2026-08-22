@@ -1,6 +1,6 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { extractPinterestMedia, PinterestMediaEntry } from '@mbd/core/resolvers/sniffers/pinterest-media-sniff';
-import { installResponseSniffer, makeSnifferEmit, installReplayOnReady } from '@mbd/core/resolvers/sniffers/response-sniffer';
+import { installResponseSniffer, makeSnifferEmit, installReplayOnReady, isObservationActive, onObservationStop } from '@mbd/core/resolvers/sniffers/response-sniffer';
 import { PINTEREST_MATCHES } from '@mbd/core/resolvers/sniffers/pinterest-hosts';
 
 /**
@@ -14,11 +14,13 @@ import { PINTEREST_MATCHES } from '@mbd/core/resolvers/sniffers/pinterest-hosts'
  * buffered and replayed when the relay announces `mbd-pinterest-ready`.
  */
 export default defineContentScript({
+  registration: 'runtime',
   matches: PINTEREST_MATCHES,
   runAt: 'document_start',
   world: 'MAIN',
   main() {
     const buffer: PinterestMediaEntry[] = [];
+    onObservationStop(() => buffer.splice(0));
     let relayReady = false;
     const emit = makeSnifferEmit<PinterestMediaEntry>({
       guard: (text) => text.indexOf('"images"') !== -1 || text.indexOf('video_list') !== -1,
@@ -38,7 +40,7 @@ export default defineContentScript({
     });
     installReplayOnReady('mbd-pinterest-ready', () => {
       relayReady = true;
-      if (buffer.length) window.postMessage({ source: 'mbd-pinterest-media', entries: buffer.splice(0) }, location.origin);
+      if (isObservationActive() && buffer.length) window.postMessage({ source: 'mbd-pinterest-media', entries: buffer.splice(0) }, location.origin);
     });
   },
 });

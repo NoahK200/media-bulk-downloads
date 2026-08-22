@@ -14,7 +14,7 @@ vi.mock('@/extension/background/state', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/extension/background/state')>()),
   currentSettings: MOCK,
   settingsReady: Promise.resolve(),
-  writeSettingsPatch: vi.fn(() => Promise.resolve(MOCK)),
+  writeSettingsPatch: vi.fn(() => Promise.resolve({ settings: MOCK, result: { ok: true } })),
 }));
 
 import { messageRouter } from '@/extension/background/message-router';

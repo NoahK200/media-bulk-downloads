@@ -1,34 +1,47 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import { SettingsData, SettingsProps } from '@mbd/core/types';
+import { MutationResponse, PrivacyPreferences, SettingsData, SettingsProps } from '@mbd/core/types';
 import { expandPathTemplate, todayISO } from '@mbd/core/collection/paths';
-import { buildBackup, parseBackup } from '@mbd/storage/backup';
+import { buildBackup, MAX_BACKUP_BYTES, parseBackup } from '@mbd/storage/backup';
 import { loadFavourites } from '@mbd/storage/favourites';
 import { loadHistory } from '@mbd/storage/history';
 import { loadExcluded } from '@mbd/storage/excluded';
 import { DEFAULT_SETTINGS } from '@mbd/storage/settings';
-import { downloadText, sendRuntimeMessage } from '@/extension/popup/utils';
+import { DEFAULT_PRIVACY_PREFERENCES } from '@mbd/storage/privacy';
+import { downloadText, sendMutationMessage, sendRuntimeMessage } from '@/extension/popup/utils';
 import { useDialog } from '@/extension/popup/hooks/useDialog';
 import DownloadsPane from '@/extension/popup/components/panels/settings/DownloadsPane';
 import MediaPane from '@/extension/popup/components/panels/settings/MediaPane';
 import DisplayPane from '@/extension/popup/components/panels/settings/DisplayPane';
 import DataPane from '@/extension/popup/components/panels/settings/DataPane';
+import PrivacyPane from '@/extension/popup/components/panels/settings/PrivacyPane';
 import { SettingsTabs, SettingsTab } from '@/extension/popup/components/panels/settings/SettingsTabs';
 
 const TABS: SettingsTab[] = [
   { id: 'downloads', label: 'Downloads' },
   { id: 'media', label: 'Media' },
   { id: 'display', label: 'Display' },
+  { id: 'privacy', label: 'Privacy' },
   { id: 'data', label: 'Data' },
 ];
 
-const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings: initialSettings, perHost }) => {
+const Settings: React.FC<SettingsProps> = ({
+  onClose,
+  onSettingsChange,
+  settings: initialSettings,
+  privacy: initialPrivacy = DEFAULT_PRIVACY_PREFERENCES,
+  onPrivacyChange = () => {},
+  initialTab = 'downloads',
+  perHost,
+}) => {
   const [settings, setSettings] = useState<SettingsData>(initialSettings);
-  const [activeTab, setActiveTab] = useState('downloads');
+  const [privacy, setPrivacy] = useState<PrivacyPreferences>(initialPrivacy);
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [siteNote, setSiteNote] = useState('');
   const panelRef = useDialog(onClose);
 
   const externalRef = useRef<SettingsData>(initialSettings);
+  const privacyExternalRef = useRef<PrivacyPreferences>(initialPrivacy);
   useEffect(() => {
     setSettings((prev) => {
       let changed = false;
@@ -45,6 +58,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
     externalRef.current = initialSettings;
   }, [initialSettings]);
 
+  useEffect(() => {
+    setPrivacy((previous) => JSON.stringify(previous) === JSON.stringify(privacyExternalRef.current)
+      ? initialPrivacy
+      : previous);
+    privacyExternalRef.current = initialPrivacy;
+  }, [initialPrivacy]);
+
   const isNonDefault = (keys: (keyof SettingsData)[]) =>
     keys.some((k) => JSON.stringify(initialSettings[k]) !== JSON.stringify(DEFAULT_SETTINGS[k]));
   const downloadsAdvOpen = isNonDefault(['downloadConcurrency', 'notifyOnComplete', 'nearDuplicateThreshold']);
@@ -52,8 +72,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
   const displayAdvOpen = isNonDefault(['popupWidth', 'popupHeight', 'previewSize', 'bubbleWidth', 'bubbleHeight']);
 
   const dirty = useMemo(
-    () => JSON.stringify(settings) !== JSON.stringify(initialSettings),
-    [settings, initialSettings],
+    () => JSON.stringify(settings) !== JSON.stringify(initialSettings)
+      || JSON.stringify(privacy) !== JSON.stringify(initialPrivacy),
+    [settings, initialSettings, privacy, initialPrivacy],
   );
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -106,14 +127,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
     return dir ? `Downloads/${dir}/image.jpg` : 'Downloads/image.jpg';
   })();
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const delta: Partial<SettingsData> = {};
     for (const key of Object.keys(settings) as (keyof SettingsData)[]) {
       if (JSON.stringify(settings[key]) !== JSON.stringify(initialSettings[key])) {
         (delta as Record<string, unknown>)[key] = settings[key];
       }
     }
-    onSettingsChange({ ...initialSettings, ...delta });
+    const settingsResponse = Object.keys(delta).length > 0
+      ? await onSettingsChange({ ...initialSettings, ...delta })
+      : undefined;
+    if (settingsResponse?.status === 'error') {
+      setBackupNote(settingsResponse.message);
+      return;
+    }
+    if (JSON.stringify(privacy) !== JSON.stringify(initialPrivacy)) {
+      const privacyResponse = await onPrivacyChange({ ...privacy, reviewComplete: true });
+      if (privacyResponse?.status === 'error') {
+        setBackupNote(privacyResponse.message);
+        return;
+      }
+    }
     onClose();
   };
 
@@ -141,28 +175,57 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    if (file.size > MAX_BACKUP_BYTES) {
+      setBackupNote('That backup is larger than the 10 MiB safety limit.');
+      return;
+    }
     const backup = parseBackup(await file.text());
     if (!backup) {
       setBackupNote('That file is not a valid Media Bulk Downloads backup.');
       return;
     }
+    const settingsResponse = await onSettingsChange(backup.settings);
+    if (settingsResponse?.status === 'error') {
+      setBackupNote(settingsResponse.message);
+      return;
+    }
     setSettings(backup.settings);
-    onSettingsChange(backup.settings);
-    sendRuntimeMessage({ type: 'RESTORE_DATA', favourites: backup.favourites, history: backup.history, excluded: backup.excluded });
-    setBackupNote(`Imported settings, ${backup.favourites.length} favourites, ${backup.history.length} history entries, and ${backup.excluded.length} blocked sources.`);
+    chrome.runtime.sendMessage(
+      { type: 'RESTORE_DATA', favourites: backup.favourites, history: backup.history, excluded: backup.excluded },
+      (response?: MutationResponse) => {
+        const error = chrome.runtime.lastError;
+        if (error || !response) {
+          setBackupNote(error?.message || 'The backup data could not be restored.');
+          return;
+        }
+        const repairNote = backup.repairs?.length ? ` Repaired ${backup.repairs.length} invalid setting${backup.repairs.length === 1 ? '' : 's'}.` : '';
+        if (response.status === 'error') {
+          setBackupNote(`${response.message}${repairNote}`);
+          return;
+        }
+        setBackupNote(`Imported settings, ${backup.favourites.length} favourites, ${backup.history.length} history entries, and ${backup.excluded.length} blocked sources.${repairNote}`);
+      },
+    );
   };
 
   const handleResetSettings = () => {
     setSettings(DEFAULT_SETTINGS);
-    onSettingsChange(DEFAULT_SETTINGS);
-    setBackupNote('Settings reset to defaults.');
+    void Promise.resolve(onSettingsChange(DEFAULT_SETTINGS)).then((response) => {
+      setBackupNote(response?.status === 'error' ? response.message : 'Settings reset to defaults.');
+    });
   };
 
   const handleClearData = () => {
-    sendRuntimeMessage({ type: 'CLEAR_FAVOURITES' });
-    sendRuntimeMessage({ type: 'CLEAR_HISTORY' });
-    sendRuntimeMessage({ type: 'CLEAR_EXCLUDED' });
-    setBackupNote('Cleared favourites, history, and blocked sources.');
+    void Promise.all([
+      sendMutationMessage({ type: 'CLEAR_FAVOURITES' }),
+      sendMutationMessage({ type: 'CLEAR_HISTORY' }),
+      sendMutationMessage({ type: 'CLEAR_EXCLUDED' }),
+    ]).then((responses) => {
+      const failed = responses.filter((response) => response.status === 'error');
+      setBackupNote(failed.length
+        ? `Clear was incomplete: ${failed.length} data store${failed.length === 1 ? '' : 's'} could not be saved.`
+        : 'Cleared favourites, history, and blocked sources.');
+    });
   };
 
   return (
@@ -191,7 +254,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
           </button>
         </header>
 
-        <SettingsTabs tabs={TABS} active={activeTab} onSelect={setActiveTab} />
+        <SettingsTabs tabs={TABS} active={activeTab} onSelect={(id) => setActiveTab(id as typeof activeTab)} />
         <div className="scroll-thin mbd:flex-1 mbd:overflow-y-auto mbd:px-4 mbd:py-4">
           {activeTab === 'downloads' && (
             <DownloadsPane
@@ -225,6 +288,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
               setSettings={setSettings}
               advancedDefaultOpen={displayAdvOpen}
             />
+          )}
+          {activeTab === 'privacy' && (
+            <PrivacyPane privacy={privacy} setPrivacy={setPrivacy} />
           )}
           {activeTab === 'data' && (
             <DataPane
@@ -269,7 +335,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onSettingsChange, settings
             <button onClick={onClose} className="btn btn-ghost">
               Cancel
             </button>
-            <button onClick={handleSave} className="btn btn-primary" disabled={!dirty}>
+            <button onClick={() => void handleSave()} className="btn btn-primary" disabled={!dirty}>
               Save
             </button>
           </div>

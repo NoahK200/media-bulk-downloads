@@ -1,4 +1,4 @@
-import { HOST_ID } from '@/extension/bubble/mount';
+import { HOST_ID } from '@/extension/bubble/constants';
 import { collectMedia as coreCollectMedia, type ScanRoot } from '@mbd/core/collection/collect';
 
 export * from '@mbd/core/collection/collect';

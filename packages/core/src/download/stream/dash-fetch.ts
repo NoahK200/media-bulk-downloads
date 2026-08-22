@@ -1,6 +1,7 @@
 import { DashDeps } from '@mbd/core/download/stream/dash';
 import { retryingFetch, FETCH_TIMEOUT_MS } from '@mbd/core/net/retry';
 import { readBounded, readBoundedText } from '@mbd/core/download/stream/bounded-fetch';
+import { MANIFEST_MAX_BYTES, RESPONSE_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 
 /**
  * DASH engine deps backed by the browser: an extension page's CORS-free `fetch`
@@ -16,14 +17,14 @@ export function browserDashDeps(onProgress?: (done: number, total: number) => vo
     fetchText: async (url) => {
       const res = await netFetch(url);
       if (!res.ok) throw new Error(`Manifest fetch failed (${res.status}).`);
-      return readBoundedText(res);
+      return readBoundedText(res, MANIFEST_MAX_BYTES);
     },
     fetchBytes: async (url) => {
       const res = await netFetch(url);
       if (!res.ok) throw new Error(`Segment fetch failed (${res.status}).`);
-      return readBounded(res);
+      return readBounded(res, RESPONSE_MAX_BYTES);
     },
-    concurrency: 6,
+    concurrency: 4,
     onProgress,
   };
 }

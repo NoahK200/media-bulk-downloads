@@ -27,7 +27,7 @@ identical so both stores match.
 
 - [ ] **Partner Center account** registered for the *Microsoft Edge* program (free — no registration fee).
 - [ ] `wxt.config.ts` name/description correct; version comes from `apps/extension/package.json`. `yarn build:edge` emits `apps/extension/.output/edge-mv3/manifest.json`.
-- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `tabs`, `contextMenus`, `offscreen`, host `<all_urls>`; optional `notifications` and
+- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `scripting`, `tabs`, `contextMenus`, `offscreen`, host `<all_urls>`; optional `notifications` and
   `declarativeNetRequestWithHostAccess` (both requested at runtime).
 - [ ] Icons 16/32/48/64/128 present (`apps/extension/src/public/icon/`) — ✅ already in the build.
 - [ ] **Store logo 300×300 PNG** ready (Edge-specific, see §5) — ✅ `assets/v2/store-logo-300x300.png`.
@@ -128,7 +128,7 @@ FASTER TO REACH
 • Back up and restore your settings, favourites, and history as a JSON file
 
 PRIVATE BY DESIGN
-• Network-free by default: it only reads what the page already loaded
+• Network- and observation-free by default: it only reads what the page already loaded
 • No accounts, no analytics, no servers — everything runs locally in your browser
 • Your settings and history never leave your device
 
@@ -392,4 +392,3 @@ downloads / downloads.open: save and reopen files. storage: local settings + his
 PRIVACY
 No data is collected or transmitted; no remote code is executed. Settings and history never leave the device.
 ```
-

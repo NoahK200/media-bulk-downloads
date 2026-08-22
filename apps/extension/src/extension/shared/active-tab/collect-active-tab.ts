@@ -1,4 +1,5 @@
 import { ImageInfo, PageType } from '@mbd/core/types';
+import { ensureContentScript } from '@/extension/shared/active-tab/runtime-content';
 
 /**
  * Collects images from the active tab by messaging its content script.
@@ -9,9 +10,10 @@ export async function collectFromActiveTab(): Promise<ImageInfo[]> {
   if (!tab?.id) {
     throw new Error('No active tab found.');
   }
+  await ensureContentScript(tab.id);
 
   return new Promise<ImageInfo[]>((resolve, reject) => {
-    chrome.tabs.sendMessage(tab.id as number, 'GET_IMAGES', (images: ImageInfo[]) => {
+    chrome.tabs.sendMessage(tab.id as number, { type: 'GET_IMAGES', allowNetwork: true }, (images: ImageInfo[]) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message || 'unknown error'));
         return;
@@ -36,10 +38,14 @@ export function getPageType(): Promise<PageType> {
         .query({ active: true, currentWindow: true })
         .then(([tab]) => {
           if (!tab?.id) return resolve('unknown');
-          chrome.tabs.sendMessage(tab.id, 'GET_PAGE_TYPE', (pt: PageType) => {
-            if (chrome.runtime.lastError) return resolve('unknown');
-            resolve(pt ?? 'unknown');
-          });
+          void ensureContentScript(tab.id)
+            .then(() => {
+              chrome.tabs.sendMessage(tab.id!, 'GET_PAGE_TYPE', (pt: PageType) => {
+                if (chrome.runtime.lastError) return resolve('unknown');
+                resolve(pt ?? 'unknown');
+              });
+            })
+            .catch(() => resolve('unknown'));
         })
         .catch(() => resolve('unknown'));
     } catch {

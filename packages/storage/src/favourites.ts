@@ -1,10 +1,12 @@
-import { FavouriteEntry } from '@mbd/core/types';
+import { FavouriteEntry, PersistenceResult } from '@mbd/core/types';
 import { canonicalSrcKey, SrcKeySet } from '@mbd/core/collection/canonical';
 import { durableSet } from '@mbd/storage/idb';
 import { mergeFavourites, FAVOURITES_CAP, FAVOURITES_MAX_BYTES } from '@mbd/core/collection/entry-merge';
 
 export const FAVOURITES_KEY = 'favourites';
 export { mergeFavourites, FAVOURITES_CAP, FAVOURITES_MAX_BYTES };
+const safeStoredSrc = (value: unknown): value is string => typeof value === 'string' && value.length <= 16_384
+  && (/^https?:\/\//i.test(value) || /^data:image\//i.test(value) || (!value.startsWith('//') && !/^[a-z][a-z0-9+.-]*:/i.test(value)));
 
 export async function loadFavourites(): Promise<FavouriteEntry[]> {
   const result = await chrome.storage.local.get(FAVOURITES_KEY);
@@ -12,7 +14,7 @@ export async function loadFavourites(): Promise<FavouriteEntry[]> {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((e): e is FavouriteEntry =>
-      !!e && typeof e === 'object' && typeof (e as FavouriteEntry).src === 'string')
+      !!e && typeof e === 'object' && safeStoredSrc((e as FavouriteEntry).src))
     .map((e) => ({ ...e, time: Number((e as FavouriteEntry).time) || 0 }));
 }
 
@@ -24,30 +26,30 @@ function serialize<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /** Resolves to whether the write persisted (see durableSet). */
-export async function addFavourite(entry: FavouriteEntry): Promise<boolean> {
+export async function addFavourite(entry: FavouriteEntry): Promise<PersistenceResult> {
   return serialize(async () => {
     const merged = mergeFavourites(await loadFavourites(), [entry]);
     return durableSet(FAVOURITES_KEY, merged);
   });
 }
 
-export async function removeFavourite(src: string): Promise<void> {
+export async function removeFavourite(src: string): Promise<PersistenceResult> {
   return serialize(async () => {
     const next = (await loadFavourites()).filter((e) => canonicalSrcKey(e.src) !== canonicalSrcKey(src));
-    await durableSet(FAVOURITES_KEY, next);
+    return durableSet(FAVOURITES_KEY, next);
   });
 }
 
 /** Replace favourites with an imported list, normalized (dedup/sort/cap/byte-budget). */
-export async function restoreFavourites(entries: FavouriteEntry[]): Promise<void> {
+export async function restoreFavourites(entries: FavouriteEntry[]): Promise<PersistenceResult> {
   return serialize(async () => {
-    await durableSet(FAVOURITES_KEY, mergeFavourites([], entries));
+    return durableSet(FAVOURITES_KEY, mergeFavourites([], entries));
   });
 }
 
-export async function clearFavourites(): Promise<void> {
+export async function clearFavourites(): Promise<PersistenceResult> {
   return serialize(async () => {
-    await durableSet(FAVOURITES_KEY, []);
+    return durableSet(FAVOURITES_KEY, []);
   });
 }
 

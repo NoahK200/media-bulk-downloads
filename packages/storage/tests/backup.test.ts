@@ -83,14 +83,15 @@ describe('parseBackup', () => {
     expect(b?.favourites).toEqual([{ src: 'https://a', kind: 'image', type: 'jpeg', sourcePageUrl: 'p', time: 1 }]);
     expect(b?.history).toEqual([{ src: 'https://h', filename: 'x', kind: 'video', type: 'mp4', sourcePageUrl: 'p', time: 2 }]);
     expect(b?.excluded).toEqual([{ value: 'cdn.bad.com', kind: 'host', time: 1 }]);
-    expect(b?.settings.namingMode).toBe('plain');
+    expect(b?.settings.namingMode).toBe('prefixed');
+    expect(b?.repairs).toContainEqual({ key: 'namingMode', reason: 'invalid-enum' });
     expect(b?.version).toBe(2);
   });
 
   it('drops entries that have no string src', () => {
-    const b = parseBackup(JSON.stringify({ app: BACKUP_APP, favourites: [{ src: 'ok' }, { nope: 1 }, null, 7], history: [] }));
+    const b = parseBackup(JSON.stringify({ app: BACKUP_APP, favourites: [{ src: 'https://ok' }, { src: 'javascript:bad' }, { nope: 1 }, null, 7], history: [] }));
     expect(b?.favourites).toHaveLength(1);
-    expect(b?.favourites[0].src).toBe('ok');
+    expect(b?.favourites[0].src).toBe('https://ok');
   });
 
   it('drops an excluded entry with a valid value but missing/invalid kind', () => {
@@ -148,8 +149,8 @@ describe('parseBackup', () => {
         { src: 'https://b', sourcePageUrl: 'not a url', time: 2 },
       ],
     }));
-    expect(b?.favourites[0].sourcePageUrl).toBe('https://page.example/post');
-    expect(b?.favourites[1].sourcePageUrl).toBe('not a url');
+    expect(b?.favourites.find((entry) => entry.src === 'https://a')?.sourcePageUrl).toBe('https://page.example/post');
+    expect(b?.favourites.find((entry) => entry.src === 'https://b')?.sourcePageUrl).toBe('not a url');
   });
 
   it('strips control chars/whitespace that try to hide a javascript: scheme', () => {

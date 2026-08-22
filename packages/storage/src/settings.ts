@@ -1,4 +1,4 @@
-import { SettingsData } from '@mbd/core/types';
+import { SettingsData, SettingsRepair } from '@mbd/core/types';
 import { AUDIO_FORMATS } from '@mbd/core/download/stream/mp3';
 
 /** Default user settings, shared by the popup, background worker, and bubble. */
@@ -7,7 +7,6 @@ export const DEFAULT_SETTINGS: SettingsData = {
   fileNamePrefix: 'image_',
   popupWidth: 460,
   popupHeight: 600,
-  showImageCount: true,
   minimumImageSize: 0,
   excludeBase64Images: false,
   excludeEmoji: false,
@@ -25,7 +24,6 @@ export const DEFAULT_SETTINGS: SettingsData = {
   bubblePanelPlacement: 'anchored',
   bubblePanelPoint: { x: 40, y: 40 },
   resolveOriginals: false,
-  sankakuAuthedOriginals: false,
   captureHlsStreams: false,
   streamQuality: 'auto',
   audioFormat: 'm4a',
@@ -41,44 +39,144 @@ export const DEFAULT_SETTINGS: SettingsData = {
   nearDuplicateThreshold: 8,
 };
 
-/** A plain object, or {} — so spreading a corrupt string/array/number legacy
- *  value can't inject junk index keys into a nested settings object. */
+const MAX_SETTING_STRING = 1_024;
+const own = (obj: Record<string, unknown>, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
+
+/** A plain object, or {} — corrupt strings/arrays/numbers never become settings. */
 const asObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
-/** Coerce to a finite integer clamped to [min, max]; NaN / non-numeric / a string
- *  like "many" falls back to `fallback`. Guards fields whose value drives a loop
- *  bound or concurrency cap, where a corrupt (synced or hand-edited/imported)
- *  value would otherwise hang or unbound the affected subsystem. */
-const clampInt = (v: unknown, min: number, max: number, fallback: number): number => {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
-};
-
-/** Merge stored settings over defaults, tolerating partial/legacy/unknown shapes. */
-export function withDefaults(stored: unknown): SettingsData {
-  const s = asObject(stored) as Partial<SettingsData>;
-  return {
-    ...DEFAULT_SETTINGS,
-    ...s,
-    bubblePosition: { ...DEFAULT_SETTINGS.bubblePosition, ...asObject(s.bubblePosition) },
-    bubblePanelPoint: { ...DEFAULT_SETTINGS.bubblePanelPoint, ...asObject(s.bubblePanelPoint) },
-    downloadConcurrency: clampInt(s.downloadConcurrency, 1, 20, DEFAULT_SETTINGS.downloadConcurrency),
-    deepScanMaxItems: clampInt(s.deepScanMaxItems, 1, 100_000, DEFAULT_SETTINGS.deepScanMaxItems),
-    deepScanMaxSeconds: clampInt(s.deepScanMaxSeconds, 1, 600, DEFAULT_SETTINGS.deepScanMaxSeconds),
-    deepScanMaxScrolls: clampInt(s.deepScanMaxScrolls, 1, 10_000, DEFAULT_SETTINGS.deepScanMaxScrolls),
-    nearDuplicateThreshold: clampInt(s.nearDuplicateThreshold, 2, 16, DEFAULT_SETTINGS.nearDuplicateThreshold),
-    minimumImageSize: clampInt(s.minimumImageSize, 0, 10_000, DEFAULT_SETTINGS.minimumImageSize),
-    popupWidth: clampInt(s.popupWidth, 320, 800, DEFAULT_SETTINGS.popupWidth),
-    popupHeight: clampInt(s.popupHeight, 400, 600, DEFAULT_SETTINGS.popupHeight),
-    thumbnailSize: clampInt(s.thumbnailSize, 64, 240, DEFAULT_SETTINGS.thumbnailSize),
-    previewSize: clampInt(s.previewSize, 240, 900, DEFAULT_SETTINGS.previewSize),
-    bubbleWidth: clampInt(s.bubbleWidth, 320, 3840, DEFAULT_SETTINGS.bubbleWidth),
-    bubbleHeight: clampInt(s.bubbleHeight, 360, 2160, DEFAULT_SETTINGS.bubbleHeight),
-    audioFormat: AUDIO_FORMATS.includes(s.audioFormat as SettingsData['audioFormat'])
-      ? (s.audioFormat as SettingsData['audioFormat'])
-      : DEFAULT_SETTINGS.audioFormat,
+/** Strictly validate all settings. Missing fields use the fallback without being
+ * reported; present invalid fields are repaired and surfaced to import callers. */
+export function sanitizeSettings(
+  stored: unknown,
+  fallback: SettingsData = DEFAULT_SETTINGS,
+): { settings: SettingsData; repairs: SettingsRepair[] } {
+  const s = asObject(stored);
+  const repairs: SettingsRepair[] = [];
+  const repair = (key: string, reason: SettingsRepair['reason']): void => {
+    repairs.push({ key, reason });
   };
+  const bool = <K extends keyof SettingsData>(key: K): SettingsData[K] => {
+    if (!own(s, String(key))) return fallback[key];
+    if (typeof s[String(key)] !== 'boolean') {
+      repair(String(key), 'wrong-type');
+      return fallback[key];
+    }
+    return s[String(key)] as SettingsData[K];
+  };
+  const str = <K extends keyof SettingsData>(key: K): SettingsData[K] => {
+    if (!own(s, String(key))) return fallback[key];
+    const value = s[String(key)];
+    if (typeof value !== 'string') {
+      repair(String(key), 'wrong-type');
+      return fallback[key];
+    }
+    if (value.length > MAX_SETTING_STRING) {
+      repair(String(key), 'too-long');
+      return value.slice(0, MAX_SETTING_STRING) as SettingsData[K];
+    }
+    return value as SettingsData[K];
+  };
+  const integer = <K extends keyof SettingsData>(key: K, min: number, max: number): SettingsData[K] => {
+    if (!own(s, String(key))) return fallback[key];
+    const raw = s[String(key)];
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      repair(String(key), 'wrong-type');
+      return fallback[key];
+    }
+    const value = Math.floor(raw);
+    if (value < min || value > max) repair(String(key), 'out-of-range');
+    return Math.min(max, Math.max(min, value)) as SettingsData[K];
+  };
+  const enumeration = <K extends keyof SettingsData>(key: K, allowed: readonly unknown[]): SettingsData[K] => {
+    if (!own(s, String(key))) return fallback[key];
+    const value = s[String(key)];
+    if (!allowed.includes(value)) {
+      repair(String(key), typeof value === 'string' ? 'invalid-enum' : 'wrong-type');
+      return fallback[key];
+    }
+    return value as SettingsData[K];
+  };
+  const coordinate = (obj: Record<string, unknown>, key: 'x' | 'y', fallbackValue: number, prefix: string): number => {
+    if (!own(obj, key)) return fallbackValue;
+    const raw = obj[key];
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      repair(`${prefix}.${key}`, 'wrong-type');
+      return fallbackValue;
+    }
+    if (raw < -10_000 || raw > 10_000) repair(`${prefix}.${key}`, 'out-of-range');
+    return Math.min(10_000, Math.max(-10_000, raw));
+  };
+
+  const cornerValues = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+  const rawPosition = own(s, 'bubblePosition') ? asObject(s.bubblePosition) : {};
+  if (own(s, 'bubblePosition') && (!s.bubblePosition || typeof s.bubblePosition !== 'object' || Array.isArray(s.bubblePosition))) {
+    repair('bubblePosition', 'wrong-type');
+  }
+  const rawCorner = rawPosition.corner;
+  const corner = rawCorner === undefined
+    ? fallback.bubblePosition.corner
+    : cornerValues.includes(rawCorner as (typeof cornerValues)[number])
+      ? rawCorner as SettingsData['bubblePosition']['corner']
+      : (repair('bubblePosition.corner', typeof rawCorner === 'string' ? 'invalid-enum' : 'wrong-type'), fallback.bubblePosition.corner);
+  const rawPanelPoint = own(s, 'bubblePanelPoint') ? asObject(s.bubblePanelPoint) : {};
+  if (own(s, 'bubblePanelPoint') && (!s.bubblePanelPoint || typeof s.bubblePanelPoint !== 'object' || Array.isArray(s.bubblePanelPoint))) {
+    repair('bubblePanelPoint', 'wrong-type');
+  }
+
+  return {
+    settings: {
+      downloadPath: str('downloadPath'),
+      fileNamePrefix: str('fileNamePrefix'),
+      popupWidth: integer('popupWidth', 320, 800),
+      popupHeight: integer('popupHeight', 400, 600),
+      minimumImageSize: integer('minimumImageSize', 0, 10_000),
+      excludeBase64Images: bool('excludeBase64Images'),
+      excludeEmoji: bool('excludeEmoji'),
+      saveAs: bool('saveAs'),
+      notifyOnComplete: bool('notifyOnComplete'),
+      convertImagesTo: enumeration('convertImagesTo', ['off', 'png', 'jpeg']),
+      convertMetadata: enumeration('convertMetadata', ['preserve', 'strip']),
+      namingMode: enumeration('namingMode', ['original', 'prefixed']),
+      thumbnailSize: integer('thumbnailSize', 64, 240),
+      previewSize: integer('previewSize', 240, 900),
+      bubbleEnabled: bool('bubbleEnabled'),
+      bubblePosition: {
+        corner,
+        x: coordinate(rawPosition, 'x', fallback.bubblePosition.x, 'bubblePosition'),
+        y: coordinate(rawPosition, 'y', fallback.bubblePosition.y, 'bubblePosition'),
+      },
+      bubbleWidth: integer('bubbleWidth', 320, 3_840),
+      bubbleHeight: integer('bubbleHeight', 360, 2_160),
+      bubblePanelPlacement: enumeration('bubblePanelPlacement', ['anchored', 'center', 'free', ...cornerValues]),
+      bubblePanelPoint: {
+        x: coordinate(rawPanelPoint, 'x', fallback.bubblePanelPoint.x, 'bubblePanelPoint'),
+        y: coordinate(rawPanelPoint, 'y', fallback.bubblePanelPoint.y, 'bubblePanelPoint'),
+      },
+      resolveOriginals: bool('resolveOriginals'),
+      captureHlsStreams: bool('captureHlsStreams'),
+      streamQuality: enumeration('streamQuality', ['auto', 'best', 'worst', '1080', '720', '480']),
+      audioFormat: enumeration('audioFormat', AUDIO_FORMATS),
+      downloadConcurrency: integer('downloadConcurrency', 1, 20),
+      deepScanMaxItems: integer('deepScanMaxItems', 1, 100_000),
+      deepScanMaxSeconds: integer('deepScanMaxSeconds', 1, 600),
+      deepScanMaxScrolls: integer('deepScanMaxScrolls', 1, 10_000),
+      deepScanClickLoadMore: bool('deepScanClickLoadMore'),
+      smartPageDefaults: bool('smartPageDefaults'),
+      rememberScanBehaviour: bool('rememberScanBehaviour'),
+      skipDuplicateDownloads: bool('skipDuplicateDownloads'),
+      metadataSidecar: bool('metadataSidecar'),
+      nearDuplicateThreshold: integer('nearDuplicateThreshold', 2, 16),
+    },
+    repairs,
+  };
+}
+
+/** Compatibility wrapper for existing consumers that only need repaired data. */
+export function withDefaults(stored: unknown): SettingsData {
+  return sanitizeSettings(stored).settings;
 }
 
 /** Read the persisted global settings from sync storage, merged over defaults.

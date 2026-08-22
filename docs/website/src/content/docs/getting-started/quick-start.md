@@ -97,9 +97,15 @@ Stored in `chrome.storage.sync`. The Settings sheet has four tabs.
 **Display**
 
 - **Thumbnail size** in px (64–240, default 120).
-- **Show image count on toolbar icon** (on).
 - **Show floating bubble on pages** (off), plus its corner and panel position.
 - Advanced: popup width (320–800, default 460), popup height (400–600, default 600), preview size (240–900, default 360), and bubble width/height.
+
+**Privacy** (local-only; every control defaults off)
+
+- **Automatic media-count scanning** registers the network-free collector for toolbar badges.
+- **Observe media requests** registers the URL relay and supported-site response sniffers.
+- **Use my logged-in Sankaku session** allows credentialed Sankaku resolution only for explicit Sankaku batches.
+- Privacy consent is never synced, exported, or restored and is reset for review after an upgrade.
 
 **Data**
 
@@ -161,4 +167,3 @@ docs/architecture/              # monorepo-restructure design record
 Next: [Architecture](/media-bulk-downloads/how-it-works/architecture/).
 
 ---
-

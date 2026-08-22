@@ -10,7 +10,10 @@ export function streamErrorMessage(code: string): string {
     case 'live': return 'Live streams can’t be captured — there is no fixed end.';
     case 'drm': return 'This stream is DRM-protected and can’t be captured.';
     case 'sample-aes': return 'This stream uses SAMPLE-AES encryption, which isn’t supported.';
-    case 'too-large': return `Stream is too large to capture (over ${Math.round(STREAM_MAX_BYTES / 1024 / 1024 / 1024)} GB).`;
+    case 'too-large': return `Stream is too large to capture (over ${Math.round(STREAM_MAX_BYTES / 1024 / 1024)} MiB in memory mode).`;
+    case 'memory-limit': return 'This stream would exceed the safe in-memory assembly limit.';
+    case 'response-too-large': return 'One stream response exceeded the 64 MiB safety limit.';
+    case 'insufficient-storage': return 'There is not enough temporary storage to capture this stream.';
     case 'demuxed-unsupported': return 'This stream delivers audio separately in a format that can’t be combined.';
     case 'audio-unavailable': return 'This stream has no separate audio track to save as audio-only.';
     case 'mp3_transcode_failed': return 'The audio was extracted but couldn’t be converted to MP3 — try saving it as M4A instead.';

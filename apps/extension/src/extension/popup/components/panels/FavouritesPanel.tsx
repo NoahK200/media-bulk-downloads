@@ -7,7 +7,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { FavouriteEntry } from '@mbd/core/types';
 import { loadFavourites, FAVOURITES_KEY } from '@mbd/storage/favourites';
-import { relativeTime, sendRuntimeMessage } from '@/extension/popup/utils';
+import { relativeTime, sendMutationMessage, sendRuntimeMessage } from '@/extension/popup/utils';
 import { LoadingImage } from '@/extension/popup/components/LoadingImage';
 import { useDialog } from '@/extension/popup/hooks/useDialog';
 import { ClearAllButton } from '@/extension/popup/components/fields/ClearAllButton';
@@ -39,6 +39,7 @@ const displayName = (src: string): string => {
 
 const FavouritesPanel: React.FC<FavouritesPanelProps> = ({ onClose }) => {
   const [entries, setEntries] = useState<FavouriteEntry[]>([]);
+  const [error, setError] = useState('');
   const panelRef = useDialog(onClose);
 
   useEffect(() => {
@@ -55,13 +56,17 @@ const FavouritesPanel: React.FC<FavouritesPanelProps> = ({ onClose }) => {
   const sorted = [...entries].sort((a, b) => b.time - a.time);
 
   const handleRemove = (entry: FavouriteEntry) => {
-    sendRuntimeMessage({ type: 'REMOVE_FAVOURITE', src: entry.src });
-    setEntries((prev) => prev.filter((e) => e.src !== entry.src));
+    void sendMutationMessage({ type: 'REMOVE_FAVOURITE', src: entry.src }).then((response) => {
+      if (response.status === 'error') { setError(response.message); return; }
+      setEntries((prev) => prev.filter((e) => e.src !== entry.src));
+    });
   };
 
   const handleClearAll = () => {
-    sendRuntimeMessage({ type: 'CLEAR_FAVOURITES' });
-    setEntries([]);
+    void sendMutationMessage({ type: 'CLEAR_FAVOURITES' }).then((response) => {
+      if (response.status === 'error') { setError(response.message); return; }
+      setEntries([]);
+    });
   };
 
   const openSource = (entry: FavouriteEntry) => {
@@ -114,6 +119,7 @@ const FavouritesPanel: React.FC<FavouritesPanelProps> = ({ onClose }) => {
         </header>
 
         <div className="scroll-thin mbd:flex-1 mbd:space-y-2 mbd:overflow-y-auto mbd:px-4 mbd:py-4">
+          {error && <p role="alert" className="mbd:text-[11px] mbd:text-(--danger)">{error}</p>}
           {sorted.length === 0 ? (
             <p className="mbd:py-8 mbd:text-center mbd:text-[12px] mbd:text-(--ink-2)">No favourites yet</p>
           ) : (

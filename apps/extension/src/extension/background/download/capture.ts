@@ -1,7 +1,7 @@
 import { AudioFormat, ImageInfo } from '@mbd/core/types';
 import { buildDownloadFilename } from '@mbd/core/collection/download-name';
 import { recordDownloads } from '@mbd/storage/history';
-import { STREAM_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
+import { FILE_CAPTURE_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 import { streamQualityToEngine } from '@mbd/core/download/stream/quality';
 import { currentSettings } from '@/extension/background/state';
 import { notifyBatchDone } from '@/extension/background/download/downloads';
@@ -17,6 +17,15 @@ import { platform } from '@/extension/platform';
  * the broadcast directly and filters by runId itself.
  */
 export const captureRunTabs = new Map<string, number>();
+const artifactByDownloadId = new Map<number, string>();
+
+export function handleCaptureDownloadChanged(change: { id: number; state?: string; error?: string }): void {
+  if (change.state !== 'complete' && change.state !== 'interrupted' && !change.error) return;
+  const cleanupToken = artifactByDownloadId.get(change.id);
+  if (!cleanupToken) return;
+  artifactByDownloadId.delete(change.id);
+  void platform.captureHost.cleanup(cleanupToken);
+}
 
 /**
  * Capture one HLS/DASH stream item to a downloaded file: run the capture host
@@ -43,17 +52,24 @@ export async function captureStreamToFile(
     manifestUrl: item.hlsManifest ?? '',
     engine: item.type === 'mpd' ? 'dash' : 'hls',
     quality: qualityOverride ?? streamQualityToEngine(currentSettings.streamQuality),
-    maxBytes: STREAM_MAX_BYTES,
+    maxBytes: FILE_CAPTURE_MAX_BYTES,
     audioOnly,
     audioFormat,
   });
   if (!result || !result.ok) return { ok: false, code: result?.ok === false ? result.code : 'unknown' };
   const filename = buildDownloadFilename({ ...item, ext: result.ext }, 0, currentSettings, sourcePage?.url);
-  const downloadId = await platform.downloader.download(
+  const started = await platform.downloader.download(
     { url: result.blobUrl, filename, saveAs: currentSettings.saveAs, conflictAction: 'uniquify' },
   );
-  const saved = downloadId !== undefined;
-  if (downloadId !== undefined) {
+  const saved = started.kind !== 'failed';
+  if (result.cleanupToken && started.kind === 'failed') {
+    await platform.captureHost.cleanup(result.cleanupToken);
+  } else if (result.cleanupToken && started.kind === 'tracked') {
+    artifactByDownloadId.set(started.id, result.cleanupToken);
+  } else if (result.cleanupToken) {
+    setTimeout(() => { void platform.captureHost.cleanup(result.cleanupToken!); }, 120_000);
+  }
+  if (saved) {
     void recordDownloads([{
       src: item.src,
       filename: filename.split('/').pop() ?? filename,
@@ -63,7 +79,7 @@ export async function captureStreamToFile(
       sourcePageUrl: item.sourcePage?.url ?? sourcePage?.url ?? '',
       sourcePageTitle: item.sourcePage?.title ?? sourcePage?.title,
       time: Date.now(),
-      downloadId,
+      ...(started.kind === 'tracked' ? { downloadId: started.id } : {}),
     }]);
   }
   notifyBatchDone({ total: 1, succeeded: saved ? 1 : 0, failed: saved ? 0 : 1, skipped: 0 });

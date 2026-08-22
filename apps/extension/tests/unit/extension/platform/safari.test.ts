@@ -12,17 +12,17 @@ describe('safariDownloader (anchor-blob)', () => {
     const orig = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) { clicked.push(this.download); };
 
-    const id = await safariDownloader.download({ url: 'https://cdn/x.jpg', filename: 'sub/dir/photo.jpg' });
+    const result = await safariDownloader.download({ url: 'https://cdn/x.jpg', filename: 'sub/dir/photo.jpg' });
 
-    expect(id).toBe(1);
+    expect(result).toEqual({ kind: 'untracked' });
     expect(createObjectURL).toHaveBeenCalled();
     expect(clicked).toEqual(['photo.jpg']);
     HTMLAnchorElement.prototype.click = orig;
   });
 
-  it('returns undefined on a failed fetch', async () => {
+  it('returns an explicit failure on a failed fetch', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
-    expect(await safariDownloader.download({ url: 'https://cdn/x.jpg', filename: 'x.jpg' })).toBeUndefined();
+    expect(await safariDownloader.download({ url: 'https://cdn/x.jpg', filename: 'x.jpg' })).toEqual({ kind: 'failed', code: 'http-404' });
   });
 
   it('search() returns [] and open/show are no-ops (no downloads API)', async () => {

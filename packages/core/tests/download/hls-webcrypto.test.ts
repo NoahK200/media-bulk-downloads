@@ -72,7 +72,7 @@ describe('browserHlsDeps', () => {
     const onProgress = vi.fn();
     const deps = browserHlsDeps(onProgress);
     expect(deps.decrypt).toBe(webcryptoDecrypt);
-    expect(deps.concurrency).toBe(6);
+    expect(deps.concurrency).toBe(4);
     expect(deps.onProgress).toBe(onProgress);
   });
 });

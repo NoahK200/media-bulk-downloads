@@ -1,0 +1,27 @@
+{
+  "firefoxWarnings": [
+    {
+      "code": "UNSAFE_VAR_ASSIGNMENT",
+      "filePattern": "^chunks/popup-[A-Za-z0-9_-]+\\.js$",
+      "maxCount": 2,
+      "reason": "Mozilla flags React 19 reconciler innerHTML assignments in the minified vendor bundle; application code does not call innerHTML.",
+      "expires": "2026-12-31"
+    },
+    {
+      "code": "UNSAFE_VAR_ASSIGNMENT",
+      "filePattern": "^content-scripts/bubble\\.js$",
+      "maxCount": 2,
+      "reason": "Mozilla flags the same React 19 reconciler internals in the consented bubble bundle; application code does not call innerHTML.",
+      "expires": "2026-12-31"
+    }
+  ],
+  "developmentAdvisories": [],
+  "toolchainExceptions": [
+    {
+      "component": "eslint",
+      "version": "9.39.4",
+      "reason": "eslint-plugin-react does not yet declare ESLint 10 support; keep ESLint and @eslint/js aligned until the plugin supports it.",
+      "expires": "2026-12-31"
+    }
+  ]
+}

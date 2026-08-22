@@ -23,6 +23,32 @@ export interface ResponseSnifferOptions {
   contentTypeOk?: (contentType: string) => boolean;
 }
 
+let observationActive = true;
+let stopListenerInstalled = false;
+const stopCallbacks = new Set<() => void>();
+
+/** MAIN-world observation can be disabled immediately on existing pages. The
+ * stop is one-way for that document; re-enabling requires a reload, so page code
+ * cannot forge an enable event after the extension has revoked consent. */
+export function installObservationStopListener(): void {
+  if (stopListenerInstalled) return;
+  stopListenerInstalled = true;
+  window.addEventListener('message', (event: MessageEvent) => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    if ((event.data as { source?: unknown } | null)?.source !== 'mbd-observation-stop') return;
+    observationActive = false;
+    for (const callback of stopCallbacks) {
+      try { callback(); } catch { /* best-effort cleanup */ }
+    }
+    stopCallbacks.clear();
+  });
+}
+
+export const isObservationActive = (): boolean => observationActive;
+export function onObservationStop(callback: () => void): void {
+  stopCallbacks.add(callback);
+}
+
 /** Read an XHR body as text regardless of its `responseType`. The `responseText`
  *  getter throws `InvalidStateError` when `responseType` is anything but '' or
  *  'text', so a page that sets `responseType='json'` (Instagram/X do) would lose
@@ -45,6 +71,7 @@ function readXhrBody(xhr: XMLHttpRequest): string | undefined {
 
 /** Wrap the page's fetch + XMLHttpRequest to feed JSON API response text to `emit`. */
 export function installResponseSniffer({ isApi, emit, urlKey, contentTypeOk }: ResponseSnifferOptions): void {
+  installObservationStopListener();
   const ctOk = contentTypeOk ?? ((ct: string) => ct.includes('json'));
   const nativeFetch = window.fetch;
   window.fetch = function patchedFetch(this: unknown, ...args: Parameters<typeof fetch>) {
@@ -52,7 +79,7 @@ export function installResponseSniffer({ isApi, emit, urlKey, contentTypeOk }: R
     try {
       const input = args[0];
       const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input ?? '');
-      if (isApi(url)) {
+      if (observationActive && isApi(url)) {
         res
           .then((r) => {
             if (ctOk(r.headers.get('content-type') || '')) r.clone().text().then((t) => emit(t, url)).catch(() => {});
@@ -85,7 +112,7 @@ export function installResponseSniffer({ isApi, emit, urlKey, contentTypeOk }: R
         try {
           const url = String((this as unknown as Record<string, unknown>)[urlKey] || '');
           const ct = this.getResponseHeader('content-type') || '';
-          if (isApi(url) && ctOk(ct)) {
+          if (observationActive && isApi(url) && ctOk(ct)) {
             const body = readXhrBody(this);
             if (typeof body === 'string') emit(body, url);
           }
@@ -116,9 +143,10 @@ export interface UrlSnifferOptions {
  * every error so the page is never disturbed.
  */
 export function installUrlSniffer({ isMatch, onUrl }: UrlSnifferOptions): void {
+  installObservationStopListener();
   const report = (raw: string | undefined): void => {
     try {
-      if (!raw) return;
+      if (!observationActive || !raw) return;
       const abs = new URL(raw, location.href).href;
       if (isMatch(abs)) onUrl(abs);
     } catch {
@@ -204,7 +232,7 @@ function parseNdjson(text: string): unknown[] {
  */
 export function makeSnifferEmit<T>({ guard, extract, envelope, ndjson }: EmitOptions<T>): (text: string) => void {
   return (text: string): void => {
-    if (!text || !guard(text)) return;
+    if (!observationActive || !text || !guard(text)) return;
     try {
       const items = ndjson ? parseNdjson(text).flatMap((json) => extract(json)) : extract(JSON.parse(text));
       if (items.length) window.postMessage(envelope(items), location.origin);

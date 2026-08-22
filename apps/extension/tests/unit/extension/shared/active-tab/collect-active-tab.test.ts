@@ -16,7 +16,7 @@ describe('collectFromActiveTab', () => {
     (chrome.tabs.sendMessage as Mock).mockImplementation((_id, _msg, cb) => cb(sample));
 
     await expect(collectFromActiveTab()).resolves.toEqual(sample);
-    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(7, 'GET_IMAGES', expect.any(Function));
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(7, { type: 'GET_IMAGES', allowNetwork: true }, expect.any(Function));
   });
 
   it('normalizes a non-array response to an empty array', async () => {

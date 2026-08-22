@@ -17,11 +17,14 @@ export default defineConfig({
     permissions: [
       ...(browser === 'safari' ? [] : ['downloads', 'downloads.open']),
       'storage',
+      'scripting',
       'tabs',
       'contextMenus',
       ...(browser === 'firefox' || browser === 'safari' ? [] : ['offscreen']),
     ],
-    optional_permissions: browser === 'safari' ? [] : ['notifications', 'declarativeNetRequestWithHostAccess'],
+    optional_permissions: browser === 'firefox' || browser === 'safari'
+      ? (browser === 'firefox' ? ['notifications'] : [])
+      : ['notifications', 'declarativeNetRequestWithHostAccess'],
     host_permissions: ['<all_urls>'],
     ...(browser === 'firefox' || browser === 'safari' ? {} : { minimum_chrome_version: '109' }),
     icons: {

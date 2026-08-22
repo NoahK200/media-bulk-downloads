@@ -1,6 +1,6 @@
 import type { Mock } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Settings from '@/extension/popup/components/panels/Settings';
 import { DEFAULT_SETTINGS } from '@mbd/storage/settings';
@@ -9,12 +9,12 @@ import { SettingsData } from '@mbd/core/types';
 describe('Settings Component', () => {
   const mockOnClose = vi.fn();
   const mockOnSettingsChange = vi.fn();
+  const mockOnPrivacyChange = vi.fn();
   const initialSettings: SettingsData = {
     downloadPath: 'downloads',
     fileNamePrefix: 'image_',
     popupWidth: 460,
     popupHeight: 600,
-    showImageCount: true,
     minimumImageSize: 0,
     excludeBase64Images: false,
     saveAs: false,
@@ -31,7 +31,6 @@ describe('Settings Component', () => {
     bubblePanelPlacement: 'anchored' as const,
     bubblePanelPoint: { x: 40, y: 40 },
     resolveOriginals: false,
-    sankakuAuthedOriginals: false,
     captureHlsStreams: false, streamQuality: 'auto', audioFormat: 'm4a', metadataSidecar: false, nearDuplicateThreshold: 8,
     downloadConcurrency: 5,
     excludeEmoji: false,
@@ -60,7 +59,10 @@ describe('Settings Component', () => {
   beforeEach(() => {
     mockOnClose.mockClear();
     mockOnSettingsChange.mockClear();
-    (chrome.runtime.sendMessage as Mock).mockClear();
+    mockOnPrivacyChange.mockClear();
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((_message, callback) => {
+      if (typeof callback === 'function') callback({ status: 'success' });
+    });
     (chrome.permissions.request as Mock).mockReset();
   });
 
@@ -109,20 +111,22 @@ describe('Settings Component', () => {
     }));
   });
 
-  it('toggles switch settings correctly', () => {
+  it('saves local privacy switches separately from synced settings', () => {
     render(
       <Settings
         onClose={mockOnClose}
         onSettingsChange={mockOnSettingsChange}
+        onPrivacyChange={mockOnPrivacyChange}
         settings={initialSettings}
       />
     );
-    selectTab(/Display/i);
-    const toggle = screen.getByRole('switch', { name: /show image count/i });
+    selectTab(/Privacy/i);
+    const toggle = screen.getByRole('switch', { name: /automatic media-count scanning/i });
     fireEvent.click(toggle);
     fireEvent.click(screen.getByText('Save'));
-    expect(mockOnSettingsChange).toHaveBeenCalledWith(expect.objectContaining({
-      showImageCount: false,
+    expect(mockOnPrivacyChange).toHaveBeenCalledWith(expect.objectContaining({
+      automaticBadgeScanning: true,
+      reviewComplete: true,
     }));
   });
 
@@ -267,12 +271,12 @@ describe('Settings Component', () => {
     expect(mockOnClose).toHaveBeenCalled();
   });
 
-  it('applies the change AND closes the sheet on Save', () => {
+  it('applies the change AND closes the sheet on Save', async () => {
     render(<Settings onClose={mockOnClose} onSettingsChange={mockOnSettingsChange} settings={initialSettings} />);
     fireEvent.change(screen.getByLabelText(/Save to subfolder \(in Downloads\):/), { target: { value: 'shots' } });
     fireEvent.click(screen.getByText('Save'));
     expect(mockOnSettingsChange).toHaveBeenCalledWith(expect.objectContaining({ downloadPath: 'shots' }));
-    expect(mockOnClose).toHaveBeenCalled();
+    await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
   });
 
   it('clamps an out-of-range number field to its max on blur', () => {
@@ -567,7 +571,7 @@ describe('Settings Component', () => {
     const payload = JSON.parse(download.text);
     expect(payload).toMatchObject({
       app: 'media-bulk-downloads',
-      version: 1,
+      version: 2,
       settings: expect.objectContaining({ downloadPath: 'downloads' }),
     });
     expect(typeof payload.exportedAt).toBe('string');
@@ -606,6 +610,7 @@ describe('Settings Component', () => {
         history: [{ src: 'https://example.com/b.jpg', time: 2 }],
         excluded: [{ kind: 'host', value: 'ads.example.com', time: 3 }],
       }),
+      expect.any(Function),
     );
   });
 

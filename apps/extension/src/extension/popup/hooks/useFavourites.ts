@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { FavouriteEntry, ImageInfo } from '@mbd/core/types';
 import { SrcKeySet } from '@mbd/core/collection/canonical';
 import { favouriteSrcSet, FAVOURITES_KEY } from '@mbd/storage/favourites';
-import { sendRuntimeMessage } from '@/extension/popup/utils';
+import { sendMutationMessage } from '@/extension/popup/utils';
 
 export interface UseFavouritesResult {
   favouriteSrcs: SrcKeySet;
@@ -20,6 +20,7 @@ export interface UseFavouritesResult {
  */
 export function useFavourites(
   currentSourcePage: () => Promise<{ url: string; title?: string }>,
+  onError?: (message: string) => void,
 ): UseFavouritesResult {
   const [favouriteSrcs, setFavouriteSrcs] = useState<SrcKeySet>(new SrcKeySet());
 
@@ -34,7 +35,8 @@ export function useFavourites(
 
   const handleToggleFavourite = async (image: ImageInfo): Promise<void> => {
     if (favouriteSrcs.has(image.src)) {
-      sendRuntimeMessage({ type: 'REMOVE_FAVOURITE', src: image.src });
+      const response = await sendMutationMessage({ type: 'REMOVE_FAVOURITE', src: image.src });
+      if (response.status === 'error') { onError?.(response.message); return; }
       setFavouriteSrcs((prev) => prev.withoutSrc(image.src));
       return;
     }
@@ -48,7 +50,8 @@ export function useFavourites(
       ...(image.thumbnailSrc ?? image.poster ? { thumbnailSrc: image.thumbnailSrc ?? image.poster } : {}),
       ...(sourcePage.title ? { sourcePageTitle: sourcePage.title } : {}),
     };
-    sendRuntimeMessage({ type: 'ADD_FAVOURITE', entry });
+    const response = await sendMutationMessage({ type: 'ADD_FAVOURITE', entry });
+    if (response.status === 'error') { onError?.(response.message); return; }
     setFavouriteSrcs((prev) => prev.withAdded(image.src));
   };
 

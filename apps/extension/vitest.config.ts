@@ -17,9 +17,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'lcov'],
-      // Vitest v4 removed the `all` option; the v8 provider already reports only
-      // files executed during the run (the old `all: false` behavior), so no
-      // extra config is needed to keep untested files out of the report.
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.d.ts'],
+      thresholds: {
+        statements: 87,
+        branches: 81,
+        functions: 87,
+        lines: 90,
+      },
     },
   },
 });

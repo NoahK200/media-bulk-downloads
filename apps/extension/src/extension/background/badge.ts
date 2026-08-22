@@ -1,6 +1,7 @@
 import { ImageInfo } from '@mbd/core/types';
 import { filterImagesBySettings, filterExcluded } from '@mbd/core/collection/filters';
-import { currentSettings, excludedCache, settingsReady, excludedReady } from '@/extension/background/state';
+import { currentPrivacy, currentSettings, excludedCache, settingsReady, excludedReady } from '@/extension/background/state';
+import { ensureContentScript } from '@/extension/shared/active-tab/runtime-content';
 
 export const BADGE_COLOR = '#4F46E5';
 
@@ -54,40 +55,47 @@ export function clearAllBadges(): void {
  */
 export function updateAllTabsBadges(): void {
   chrome.tabs.query({}, (tabs) => {
-    tabs.forEach((tab) => {
-      if (tab.id) {
-        updateTabBadge(tab.id);
-      }
-    });
+    const ids = tabs.flatMap((tab) => tab.id == null ? [] : [tab.id]).slice(0, 50);
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < ids.length) await updateTabBadge(ids[cursor++]);
+    };
+    void Promise.all(Array.from({ length: Math.min(4, ids.length) }, worker));
   });
 }
 
 /**
  * Update the badge text for the given tab.
  */
-export function updateTabBadge(tabId: number): void {
-  void Promise.all([settingsReady, excludedReady]).then(() => {
-    chrome.tabs.sendMessage(tabId, 'GET_IMAGES', (images: ImageInfo[]) => {
-      if (chrome.runtime.lastError) {
-        chrome.action.setBadgeText({ text: '', tabId });
-        return;
-      }
-
-      if (images) {
-        const eligible = filterExcluded(filterImagesBySettings(images, currentSettings), excludedCache);
-        const badgeText = eligible.length.toString();
-        chrome.action.setBadgeText({ text: badgeText, tabId });
-        chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR, tabId });
-      }
+export async function updateTabBadge(tabId: number): Promise<void> {
+  await Promise.all([settingsReady, excludedReady]);
+  try {
+    await ensureContentScript(tabId);
+    await new Promise<void>((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: 'GET_IMAGES', allowNetwork: false }, (images: ImageInfo[]) => {
+        if (chrome.runtime.lastError) {
+          chrome.action.setBadgeText({ text: '', tabId });
+          resolve();
+          return;
+        }
+        if (images) {
+          const eligible = filterExcluded(filterImagesBySettings(images, currentSettings), excludedCache);
+          chrome.action.setBadgeText({ text: eligible.length.toString(), tabId });
+          chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR, tabId });
+        }
+        resolve();
+      });
     });
-  });
+  } catch {
+    chrome.action.setBadgeText({ text: '', tabId });
+  }
 }
 
 /**
  * Apply the current settings to all tabs.
  */
 export function applySettings(): void {
-  if (!currentSettings.showImageCount) {
+  if (!currentPrivacy.automaticBadgeScanning) {
     clearAllBadges();
   } else {
     updateAllTabsBadges();

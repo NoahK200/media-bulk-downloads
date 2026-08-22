@@ -18,7 +18,7 @@ const lastStorageListener = (): ChangeListener => {
 describe('HistoryPanel', () => {
   beforeEach(() => {
     vi.spyOn(history, 'loadHistory').mockResolvedValue([entry]);
-    (chrome.runtime.sendMessage as Mock).mockClear();
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((_message, callback) => callback?.({ status: 'success' }));
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -29,14 +29,14 @@ describe('HistoryPanel', () => {
     await userEvent.click(clearBtn);
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith({ type: 'CLEAR_HISTORY' });
     await userEvent.click(clearBtn);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CLEAR_HISTORY' });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CLEAR_HISTORY' }, expect.any(Function));
   });
 
   it('removes an entry via the background', async () => {
     render(<HistoryPanel onClose={() => {}} />);
     await screen.findByText('a.jpg');
     await userEvent.click(screen.getByRole('button', { name: /remove/i }));
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'REMOVE_HISTORY_ENTRY', src: 'https://c/a.jpg' });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'REMOVE_HISTORY_ENTRY', src: 'https://c/a.jpg' }, expect.any(Function));
   });
 
   it('re-downloads an entry', async () => {

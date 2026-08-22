@@ -16,7 +16,7 @@ const lastStorageListener = (): ChangeListener => {
 describe('ExcludedPanel', () => {
   beforeEach(() => {
     vi.spyOn(excluded, 'loadExcluded').mockResolvedValue([urlEntry, hostEntry]);
-    (chrome.runtime.sendMessage as Mock).mockClear();
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((_message, callback) => callback?.({ status: 'success' }));
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -34,6 +34,7 @@ describe('ExcludedPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove cdn\.ads\.com/i }));
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'REMOVE_EXCLUDED', kind: 'host', value: 'cdn.ads.com' }),
+      expect.any(Function),
     );
   });
 
@@ -44,7 +45,7 @@ describe('ExcludedPanel', () => {
     await userEvent.click(clearBtn);
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith({ type: 'CLEAR_EXCLUDED' });
     await userEvent.click(clearBtn);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CLEAR_EXCLUDED' });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CLEAR_EXCLUDED' }, expect.any(Function));
   });
 
   it('shows an empty state when there are no excluded sources', async () => {
@@ -59,6 +60,7 @@ describe('ExcludedPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove https:\/\/c\/a\.jpg/i }));
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'REMOVE_EXCLUDED', kind: 'url', value: 'https://c/a.jpg' }),
+      expect.any(Function),
     );
   });
 

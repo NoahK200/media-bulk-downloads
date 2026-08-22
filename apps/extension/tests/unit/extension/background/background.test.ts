@@ -1,9 +1,9 @@
 import type { Mock } from 'vitest';
 vi.mock('@mbd/storage/excluded', async () => ({
   ...(await vi.importActual<typeof import('@mbd/storage/excluded')>('@mbd/storage/excluded')),
-  addExcluded: vi.fn().mockResolvedValue(undefined),
-  removeExcluded: vi.fn().mockResolvedValue(undefined),
-  clearExcluded: vi.fn().mockResolvedValue(undefined),
+  addExcluded: vi.fn().mockResolvedValue({ ok: true }),
+  removeExcluded: vi.fn().mockResolvedValue({ ok: true }),
+  clearExcluded: vi.fn().mockResolvedValue({ ok: true }),
 }));
 import * as excludedMod from '@mbd/storage/excluded';
 vi.mock('@/extension/background/download/sidecar-writer', () => ({
@@ -266,7 +266,6 @@ describe('Background Script', () => {
         fileNamePrefix: 'img_',
         popupWidth: 500,
         popupHeight: 700,
-        showImageCount: true,
         minimumImageSize: 50,
         excludeBase64Images: true,
         saveAs: false,
@@ -283,7 +282,6 @@ describe('Background Script', () => {
         bubblePanelPlacement: 'anchored',
         bubblePanelPoint: { x: 40, y: 40 },
         resolveOriginals: false,
-        sankakuAuthedOriginals: false,
         captureHlsStreams: false, streamQuality: 'auto', audioFormat: 'm4a', metadataSidecar: false, nearDuplicateThreshold: 8,
         downloadConcurrency: 5,
         excludeEmoji: false,
@@ -317,8 +315,8 @@ describe('Background Script', () => {
       loadSettings();
     };
 
-    it('clears badges for every tab when showImageCount is off', () => {
-      load({ showImageCount: false }, [{ id: 1 }, { id: 2 }]);
+    it('clears badges for every tab when automatic badge scanning is off', () => {
+      load({}, [{ id: 1 }, { id: 2 }]);
       expect(mockChrome.action.setBadgeText).toHaveBeenCalledWith({ text: '', tabId: 1 });
       expect(mockChrome.action.setBadgeText).toHaveBeenCalledWith({ text: '', tabId: 2 });
     });
@@ -954,7 +952,7 @@ describe('context menu', () => {
       cb([{ src: 'https://c/a.jpg', kind: 'image', type: 'jpeg', width: 0, height: 0, fileSize: 0, isBase64: false, alt: '' }]));
     contextMenuHandler(info({ menuItemId: 'mbd-download-all' }), tab({ id: 9, url: 'https://page', title: 'T' }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(9, 'GET_IMAGES', expect.any(Function));
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(9, { type: 'GET_IMAGES', allowNetwork: true }, expect.any(Function));
     expect(chrome.downloads.download).toHaveBeenCalled();
   });
 
@@ -1066,7 +1064,7 @@ describe('keyboard commands', () => {
       cb([{ src: 'https://c/a.jpg', kind: 'image', type: 'jpeg', width: 0, height: 0, fileSize: 0, isBase64: false, alt: '' }]));
     commandHandler('download-all-media');
     await new Promise((r) => setTimeout(r, 0));
-    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(3, 'GET_IMAGES', expect.any(Function));
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(3, { type: 'GET_IMAGES', allowNetwork: true }, expect.any(Function));
     expect(chrome.downloads.download).toHaveBeenCalled();
   });
 
@@ -1223,7 +1221,7 @@ describe('CAPTURE_STREAM', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(chrome.offscreen.createDocument).toHaveBeenCalledTimes(1);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CAPTURE_RUN', manifestUrl: item.hlsManifest, quality: 720, maxBytes: 1024 * 1024 * 1024 }));
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CAPTURE_RUN', manifestUrl: item.hlsManifest, quality: 720, maxBytes: 2 * 1024 * 1024 * 1024 }));
     expect(chrome.downloads.download).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'blob:cap', conflictAction: 'uniquify', filename: expect.stringMatching(/\.mp4$/) }),
       expect.any(Function),
@@ -1390,7 +1388,7 @@ describe('CAPTURE_STREAM', () => {
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
     expect(chrome.downloads.download).not.toHaveBeenCalled();
-    expect(sendResponse).toHaveBeenCalledWith({ status: expect.stringMatching(/1 GB/), refusal: { code: 'too-large' } });
+    expect(sendResponse).toHaveBeenCalledWith({ status: expect.stringMatching(/256 MiB/), refusal: { code: 'too-large' } });
   });
 
   describe('CAPTURE_PROGRESS relay', () => {

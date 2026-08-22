@@ -21,12 +21,13 @@ export {};
 
 type Handler = (event: unknown) => void;
 
-const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffedPinterestMedia: Mock }> => {
+const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffedPinterestMedia: Mock; hydrate: () => void }> => {
   vi.resetModules();
   const addSpy = vi.spyOn(window, 'addEventListener');
   vi.spyOn(window, 'postMessage').mockImplementation(() => {});
+  (chrome.runtime.sendMessage as Mock).mockReturnValue(Promise.resolve(undefined));
 
-  await import('@/extension/content');
+  await import('@/extension/content/sniffer-relay');
 
   const messageHandlers = addSpy.mock.calls
     .filter((c) => c[0] === 'message')
@@ -35,8 +36,10 @@ const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffe
 
   const pinterestMod = await import('@mbd/core/resolvers/sites/pinterest');
   const ingestSniffedPinterestMedia = pinterestMod.ingestSniffedPinterestMedia as unknown as Mock;
+  const { clearSnifferBuffers, hydrateSnifferBuffers } = await import('@/extension/content/sniffer-hydrate');
+  clearSnifferBuffers();
   ingestSniffedPinterestMedia.mockClear();
-  return { messageHandlers, ingestSniffedPinterestMedia };
+  return { messageHandlers, ingestSniffedPinterestMedia, hydrate: hydrateSnifferBuffers };
 };
 
 const fire = (handlers: Handler[], event: unknown): void => handlers.forEach((h) => h(event));
@@ -57,30 +60,32 @@ describe('Pinterest media relay (pinterest.com)', () => {
   });
 
   it('feeds a valid mbd-pinterest-media envelope to ingestSniffedPinterestMedia', async () => {
-    const { messageHandlers, ingestSniffedPinterestMedia } = await loadContent();
+    const { messageHandlers, ingestSniffedPinterestMedia, hydrate } = await loadContent();
     const entries = [{ pinId: '1', kind: 'image', url: 'https://i.pinimg.com/originals/a.jpg', ext: 'jpg' }];
     fire(messageHandlers, message({ source: 'mbd-pinterest-media', entries }));
+    hydrate();
     expect(ingestSniffedPinterestMedia).toHaveBeenCalledWith(entries);
   });
 
   it('wires both the Pinterest and HLS relays on pinterest.com', async () => {
-    expect((await loadContent()).messageHandlers).toHaveLength(2);
+    expect((await loadContent()).messageHandlers).toHaveLength(3);
   });
 
   it('ignores a foreign window source, a foreign origin, a wrong tag, and a non-array entries', async () => {
-    const { messageHandlers, ingestSniffedPinterestMedia } = await loadContent();
+    const { messageHandlers, ingestSniffedPinterestMedia, hydrate } = await loadContent();
     fire(messageHandlers, message({ source: 'mbd-pinterest-media', entries: [] }, { source: {} }));
     fire(messageHandlers, message({ source: 'mbd-pinterest-media', entries: [] }, { origin: 'https://evil.example' }));
     fire(messageHandlers, message({ source: 'mbd-not-pinterest', entries: [] }));
     fire(messageHandlers, message({ source: 'mbd-pinterest-media', entries: 'nope' }));
     fire(messageHandlers, message(null));
-    expect(ingestSniffedPinterestMedia).not.toHaveBeenCalled();
+    hydrate();
+    expect(ingestSniffedPinterestMedia).toHaveBeenCalledWith([]);
   });
 
   it('announces mbd-pinterest-ready so the MAIN sniffer can replay early /resource/ responses', async () => {
     vi.resetModules();
     const postSpy = vi.spyOn(window, 'postMessage').mockImplementation(() => undefined as never);
-    await import('@/extension/content');
+    await import('@/extension/content/sniffer-relay');
     expect(postSpy).toHaveBeenCalledWith({ source: 'mbd-pinterest-ready' }, window.location.origin);
   });
 });

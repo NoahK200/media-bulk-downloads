@@ -31,19 +31,24 @@ different pipeline from the Chrome/Edge/Firefox/Opera zip uploads.
 ## Verify the degraded behavior in Safari
 
 - [ ] Collect + preview media on a page (should match other browsers).
-- [ ] Single/save download works via the anchor-blob fallback.
-- [ ] The "Capture video streams" toggle is **hidden** (no offscreen).
+- [ ] Single and bulk downloads work via the anchor/blob fallback; a batch larger
+      than five completes without waiting for nonexistent download ids.
+- [ ] Stream capture runs in the DOM-capable Safari extension page; direct HLS
+      uses OPFS when available and untracked artifacts remain for two minutes.
 - [ ] No "Retry w/ referer" affordance (no dynamic DNR).
-- [ ] Download History / on-disk dedupe are absent or degraded (no `downloads`
-      API) — confirm the UI doesn't present broken controls.
+- [ ] History labels Safari saves as dispatched and exposes no unsupported
+      progress/open/reveal/cancel controls.
+- [ ] Reopen queue/history after more than five downloads and confirm no item is
+      stuck active.
 
 ## App Store listing
 
-- [ ] App name, subtitle, description — **be explicit about the Safari limits**
-      (single/save-as downloads; no bulk queue, on-disk dedupe, or stream capture)
-      so the listing doesn't over-promise the Chromium/Firefox feature set.
-- [ ] Privacy: network-free by default; the opt-in original-resolution fetch is
-      the only external request (mirror `PRIVACY.md`).
+- [ ] App name, subtitle, description — **be explicit about the Safari limits**:
+      dispatched downloads have no browser download id, progress, on-disk
+      verification, reveal/open, or cancellation API.
+- [ ] Privacy: no page script is registered on a fresh install. Automatic badge
+      scans, request observation, and Sankaku session access are separate
+      local-only controls, all off by default (mirror `PRIVACY.md`).
 - [ ] Screenshots at required macOS sizes.
 
 ## Permission justifications (for App Store review)
@@ -53,7 +58,7 @@ The Safari build requests a **reduced** permission set — `wxt.config.ts` drops
 `declarativeNetRequestWithHostAccess` for Safari; the `@mbd/platform` seam supplies
 the fallbacks. What actually ships (verify against
 `apps/extension/.output/safari-mv3/manifest.json`): `storage`, `tabs`,
-`contextMenus`, and host `<all_urls>`.
+`contextMenus`, `scripting`, and host `<all_urls>`.
 
 **storage** — keeps the user's own preferences and local library (download history,
 favourites, excluded sources) on the device via the extension storage API. No
@@ -69,26 +74,27 @@ on a media element, "Download this media", "Download image (original quality)",
 
 **Host access — `<all_urls>`** — the extension must read the media elements on
 whatever page the user runs it on, which can be any site; it activates only when
-the user opens the popup or the on-page panel. When the optional "resolve
+the user invokes an action or grants a local privacy control. When the optional "resolve
 originals" setting is on, it fetches a higher-resolution version of a downloaded
 item directly from that media's own CDN. It does not read or transmit page content
 for any other purpose. **This is the permission Apple review most often asks about**
 (see Submit, below) — justify it as "read media on any page the user chooses to
 download from".
 
+**scripting** — runtime-injects the one-shot collector after a user action and
+registers the collector, bubble, or request observers only after their matching
+local control is enabled. A fresh profile has no registered content script.
+
 **Not requested on Safari** — nothing to justify for these; they are absent from
 the Safari manifest: `downloads`/`downloads.open` (saving uses an anchor/blob
-fallback, no downloads API), `offscreen` (no HLS/DASH stream capture),
+fallback, no downloads API), `offscreen` (capture runs in the extension page),
 `notifications`, and `declarativeNetRequestWithHostAccess` (no "retry with referer").
 
-> **Content scripts.** The manifest declares an ISOLATED-world page collector
-> (`<all_urls>`) plus six MAIN-world media sniffers (one `.m3u8`/`.mpd` manifest
-> sniffer on `<all_urls>`; five host-scoped to `instagram.com`, `x.com` +
-> `twitter.com`, `facebook.com`, `pinterest.com`, `mangadex.org`). **On Safari
-> these sniffers are inert — collection is DOM-only** — and each would in any case
-> read only request URLs the page already loaded and send nothing off-device. They
-> are manifest keys, not extra permissions, covered by the `<all_urls>`
-> justification above.
+> **Runtime content scripts.** The generated manifest has no `content_scripts`
+> entry. After consent, an isolated relay and the applicable MAIN-world sniffers
+> may be registered at `document_start`. The all-site HLS observer records URLs
+> only; supported-site sniffers inspect selected media API response bodies
+> locally, never persist raw bodies, and send nothing off-device.
 
 ## Submit
 
@@ -100,5 +106,5 @@ fallback, no downloads API), `offscreen` (no HLS/DASH stream capture),
 ## Open decisions (from #307)
 
 - macOS only, or iOS/iPadOS too? (iOS multiplies UX work — no context menus, touch.)
-- Is the degraded single-file download an acceptable Safari experience to ship,
-  or hold Safari until (if ever) Apple ships `browser.downloads`?
+- Is untracked dispatch (with no on-disk verification) acceptable for the signed
+  candidate, or should Safari remain in beta until Apple ships `browser.downloads`?

@@ -518,7 +518,7 @@ describe('captureDash — e2e mux', () => {
       fetchText: async () => videoOnly,
       fetchBytes: async () => { throw new StreamTooLargeError(); },
     };
-    await expect(captureDash('https://cdn.test/manifest.mpd', tooLarge)).rejects.toMatchObject({ code: 'too-large' });
+    await expect(captureDash('https://cdn.test/manifest.mpd', tooLarge)).rejects.toMatchObject({ code: 'response-too-large' });
   });
 
   it('maps an undecodable mux to unsupported', async () => {

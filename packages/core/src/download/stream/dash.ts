@@ -55,6 +55,8 @@ export type DashErrorCode =
   | 'audio-unavailable'
   | 'empty'
   | 'too-large'
+  | 'memory-limit'
+  | 'response-too-large'
   | 'fetch-failed';
 
 export class DashError extends Error {
@@ -379,14 +381,18 @@ export async function captureDash(url: string, deps: DashDeps, opts: DashCapture
       audioTrack = await fetchDashTrack(aExp, gd, onSegmentA, budgetA);
     } catch (e) {
       if (e instanceof DashError) throw e;
-      if (e instanceof StreamTooLargeError) throw new DashError('too-large', e.message);
+      if (e instanceof StreamTooLargeError) throw new DashError('response-too-large', e.message);
       throw new DashError('fetch-failed', 'A segment could not be fetched.');
     }
     if (!audioTrack.init) throw new DashError('unsupported', 'The audio representation has no initialization segment.');
     let m4a: Uint8Array;
     try {
+      if (opts.maxBytes && budgetA.used * 3 > opts.maxBytes) {
+        throw new DashError('memory-limit', 'Muxing this stream would exceed the memory safety limit.');
+      }
       m4a = muxAudioOnly({ init: audioTrack.init, segments: audioTrack.segments });
-    } catch {
+    } catch (error) {
+      if (error instanceof DashError) throw error;
       throw new DashError('unsupported', 'Could not extract this stream’s audio track.');
     }
     if (!m4a.length) throw new DashError('empty', 'Nothing was downloaded from the stream.');
@@ -418,18 +424,22 @@ export async function captureDash(url: string, deps: DashDeps, opts: DashCapture
     audioTrack = aExp ? await fetchDashTrack(aExp, gd, onSegment, budget) : undefined;
   } catch (e) {
     if (e instanceof DashError) throw e;
-    if (e instanceof StreamTooLargeError) throw new DashError('too-large', e.message);
+    if (e instanceof StreamTooLargeError) throw new DashError('response-too-large', e.message);
     throw new DashError('fetch-failed', 'A segment could not be fetched.');
   }
   if (!videoTrack.init) throw new DashError('unsupported', 'The video representation has no initialization segment.');
 
   let bytes: Uint8Array;
   try {
+    if (opts.maxBytes && budget.used * 3 > opts.maxBytes) {
+      throw new DashError('memory-limit', 'Muxing this stream would exceed the memory safety limit.');
+    }
     bytes = muxTracks(
       { init: videoTrack.init, segments: videoTrack.segments },
       audioTrack && audioTrack.init ? { init: audioTrack.init, segments: audioTrack.segments } : null,
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof DashError) throw error;
     throw new DashError('unsupported', 'Could not combine this stream’s tracks.');
   }
   if (!bytes.length) throw new DashError('empty', 'Nothing was downloaded from the stream.');

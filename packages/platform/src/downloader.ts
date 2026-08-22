@@ -19,6 +19,14 @@ export interface DownloadRequest {
   conflictAction?: 'uniquify' | 'overwrite' | 'prompt';
 }
 
+/** Starting a download is tracked on browsers with a downloads API and
+ * untracked on Safari's anchor-download fallback. Failure is explicit so callers
+ * never confuse a missing id with a successful untracked dispatch. */
+export type DownloadStartResult =
+  | { kind: 'tracked'; id: number }
+  | { kind: 'untracked' }
+  | { kind: 'failed'; code: string };
+
 /** State of a download as reported by the backend. */
 export interface DownloadRecord {
   id: number;
@@ -52,8 +60,8 @@ export type DownloadChangeListener = (change: {
 export interface Downloader {
   /** Whether this backend can actually download (false on capability-degraded targets). */
   readonly available: boolean;
-  /** Start a download; resolves to the backend's download id, or undefined on failure. */
-  download(request: DownloadRequest): Promise<number | undefined>;
+  /** Start a download and state whether its lifecycle can be tracked. */
+  download(request: DownloadRequest): Promise<DownloadStartResult>;
   /** Look up prior/in-flight downloads (used for on-disk dedupe + progress). */
   search(query: DownloadQuery): Promise<DownloadRecord[]>;
   /** Reveal the finished file / open it, when supported. */

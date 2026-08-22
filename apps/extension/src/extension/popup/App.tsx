@@ -18,12 +18,11 @@ import { FilteredEmptyState } from '@/extension/popup/components/states/Filtered
 import { ErrorState } from '@/extension/popup/components/states/ErrorState';
 import { AppProps, CollectScope, ExcludedKind, ImageInfo } from '@mbd/core/types';
 import { collectFromActiveTab } from '@/extension/shared/active-tab/collect-active-tab';
-import { collectOpenTabs } from '@/extension/shared/active-tab/collect-open-tabs';
+import { collectOpenTabs as collectOpenTabsDirect, listOpenTabs as listOpenTabsDirect } from '@/extension/shared/active-tab/collect-open-tabs';
 import TabPickerPanel from '@/extension/popup/components/panels/TabPickerPanel';
 import { deriveFilterOptions } from '@mbd/core/collection/filters';
 import { deepScanActiveTab, abortDeepScanActiveTab } from '@/extension/shared/active-tab/deep-scan-active-tab';
 import { hostFromUrl, registrableDomain } from '@mbd/core/collection/paths';
-import { sendRuntimeMessage } from '@/extension/popup/utils';
 import { Cog6ToothIcon, ArrowPathIcon, ChevronDoubleDownIcon, ClockIcon, XMarkIcon, StarIcon, VideoCameraIcon, NoSymbolIcon, Square2StackIcon } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { downloadable, pendingVideos } from '@/extension/popup/lib/appHelpers';
@@ -36,16 +35,21 @@ import { useMediaEngine } from '@/extension/popup/hooks/useMediaEngine';
 import { useNearDuplicates } from '@/extension/popup/hooks/useNearDuplicates';
 import { useDownloadActions, StreamRefusal } from '@/extension/popup/hooks/useDownloadActions';
 import { usePerHostSettings } from '@/extension/popup/hooks/usePerHostSettings';
+import { usePrivacy } from '@/extension/popup/hooks/usePrivacy';
+import { sendMutationMessage } from '@/extension/popup/utils';
 
 const App: React.FC<AppProps> = ({
   collect = collectFromActiveTab,
   deepScan = deepScanActiveTab,
   abortDeepScan = abortDeepScanActiveTab,
+  collectTabs = collectOpenTabsDirect,
+  loadTabs = listOpenTabsDirect,
   surface = 'popup',
   onClose,
   dragHandleProps,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'downloads' | 'privacy'>('downloads');
   const [showHistory, setShowHistory] = useState(false);
   const { downloadedSrcs, isDownloaded } = useDownloadHistory();
   const [showFavourites, setShowFavourites] = useState(false);
@@ -56,9 +60,12 @@ const App: React.FC<AppProps> = ({
   const [downloadStateFilter, setDownloadStateFilter] = useState<'all' | 'downloaded' | 'not-downloaded'>('all');
   const [showTabPicker, setShowTabPicker] = useState(false);
   const [multiTabInfo, setMultiTabInfo] = useState<{ scanned: number; skipped: number } | null>(null);
+  const [actionError, setActionError] = useState('');
   const [tabScanProgress, setTabScanProgress] = useState<{ done: number; total: number } | null>(null);
   const scopeRef = useRef<CollectScope>(scope);
   const selectedTabIdsRef = useRef<number[]>(selectedTabIds);
+  const multiTabAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   const [streamRefusal, setStreamRefusal] = useState<StreamRefusal | null>(null);
   const { selectedSrcs, setSelectedSrcs, handleToggleSelect, handleSelectRange, handleSelectAllShown, handleClearSelection } = useSelection();
 
@@ -68,9 +75,14 @@ const App: React.FC<AppProps> = ({
     return { url: tab?.url ?? '', title: tab?.title };
   };
 
-  const { favouriteSrcs, handleToggleFavourite } = useFavourites(currentSourcePage);
+  const { favouriteSrcs, handleToggleFavourite } = useFavourites(currentSourcePage, setActionError);
 
   const { settings, handleSettingsChange } = useSettings();
+  const { privacy, savePrivacy } = usePrivacy();
+  const credentialScopes = useMemo(
+    () => privacy.sankakuSessionResolution ? ['sankaku-session' as const] : [],
+    [privacy.sankakuSessionResolution],
+  );
   const perHost = usePerHostSettings(currentSourcePage, settings);
 
   const scopedCollect = useCallback(async (): Promise<ImageInfo[]> => {
@@ -79,20 +91,32 @@ const App: React.FC<AppProps> = ({
       return collect();
     }
     const tabIds = scopeRef.current === 'selected' ? selectedTabIdsRef.current : undefined;
+    multiTabAbortRef.current?.abort();
+    const controller = new AbortController();
+    multiTabAbortRef.current = controller;
     setTabScanProgress({ done: 0, total: 0 });
     try {
-      const { items, scanned, skipped } = await collectOpenTabs({
+      const { items, scanned, skipped } = await collectTabs({
         tabIds,
-        onProgress: (done, total) => setTabScanProgress({ done, total }),
+        onProgress: (done, total) => {
+          if (mountedRef.current) setTabScanProgress({ done, total });
+        },
+        signal: controller.signal,
       });
-      setMultiTabInfo({ scanned, skipped });
+      if (mountedRef.current) setMultiTabInfo({ scanned, skipped });
       return items;
     } finally {
-      setTabScanProgress(null);
+      if (multiTabAbortRef.current === controller) multiTabAbortRef.current = null;
+      if (mountedRef.current) setTabScanProgress(null);
     }
-  }, [collect]);
+  }, [collect, collectTabs]);
 
-  const { excludedMatch, excludedRef, applyExcludedOptimistic } = useExcluded();
+  useEffect(() => () => {
+    mountedRef.current = false;
+    multiTabAbortRef.current?.abort();
+  }, []);
+
+  const { excludedMatch, excludedRef, applyExcluded } = useExcluded();
 
   useEffect(() => {
     if (surface !== 'popup') return;
@@ -129,6 +153,7 @@ const App: React.FC<AppProps> = ({
     collect: scopedCollect,
     deepScan,
     abortDeepScan,
+    credentialScopes,
   });
 
   const changeScope = useCallback(
@@ -194,14 +219,26 @@ const App: React.FC<AppProps> = ({
   const excludeItem = (image: ImageInfo, kind: ExcludedKind): void => {
     const value = kind === 'host' ? registrableDomain(hostFromUrl(image.src)) : image.src;
     if (!value) return;
-    sendRuntimeMessage({ type: 'ADD_EXCLUDED', entry: { value, kind, time: Date.now() } });
-    applyExcludedOptimistic([{ kind, value, src: image.src }]);
+    void applyExcluded([{ kind, value, src: image.src }]).then((error) => {
+      if (error) setActionError(error);
+    });
   };
   const excludeSelected = (): void => {
     const items = selectedDownloadable();
-    for (const i of items) sendRuntimeMessage({ type: 'ADD_EXCLUDED', entry: { value: i.src, kind: 'url', time: Date.now() } });
-    applyExcludedOptimistic(items.map((i) => ({ kind: 'url' as const, value: i.src, src: i.src })));
+    void applyExcluded(items.map((i) => ({ kind: 'url' as const, value: i.src, src: i.src }))).then((error) => {
+      if (error) setActionError(error);
+    });
     setSelectedSrcs(new Set());
+  };
+  const storageIssue = /quota|storage|could not be saved|queue could not/i.test(actionError);
+  const clearStoragePressure = async (): Promise<void> => {
+    const results = await Promise.all([
+      sendMutationMessage({ type: 'QUEUE_CLEAR' }),
+      sendMutationMessage({ type: 'CLEAR_HISTORY' }),
+    ]);
+    setActionError(results.every((result) => result.status === 'success')
+      ? 'Completed queue entries and download history were cleared. Try the action again.'
+      : 'Storage cleanup was incomplete. Open Settings → Data to review stored data.');
   };
 
   const availableFilterOptions = useMemo(() => deriveFilterOptions(state.images), [state.images]);
@@ -245,6 +282,13 @@ const App: React.FC<AppProps> = ({
   }, [state.images, state.filteredImages, nearDuplicateCount]);
   const selectedCount = selectedSrcs.size;
   const allShownSelected = downloadableShown > 0 && selectedCount === downloadableShown;
+  const handlePrivacyChange = async (next: typeof privacy) => {
+    const response = await savePrivacy(next);
+    if (response.status === 'error') {
+      setState((previous) => ({ ...previous, status: response.message }));
+    }
+    return response;
+  };
 
   return (
     <div className="mbd-app mbd:flex mbd:h-full mbd:flex-col mbd:overflow-hidden mbd:bg-(--paper) mbd:text-(--ink)">
@@ -278,7 +322,7 @@ const App: React.FC<AppProps> = ({
             <button onClick={() => setShowHistory(true)} className="iconbtn" title="Download history" aria-label="Download history">
               <ClockIcon className="mbd:h-4.5 mbd:w-4.5" />
             </button>
-            <button onClick={() => setShowSettings(true)} className="iconbtn" title="Settings" aria-label="Settings">
+            <button onClick={() => { setSettingsInitialTab('downloads'); setShowSettings(true); }} className="iconbtn" title="Settings" aria-label="Settings">
               <Cog6ToothIcon className="mbd:h-4.5 mbd:w-4.5" />
             </button>
             {onClose && (
@@ -289,8 +333,8 @@ const App: React.FC<AppProps> = ({
           </div>
         </div>
 
-        <div className="mbd:flex mbd:items-end mbd:justify-between mbd:px-4 mbd:pb-3.5 mbd:pt-3">
-          <div className="mbd:flex mbd:items-baseline mbd:gap-2">
+        <div className="collection-toolbar mbd:flex mbd:flex-wrap mbd:items-end mbd:justify-between mbd:gap-x-3 mbd:gap-y-2 mbd:px-4 mbd:pb-3.5 mbd:pt-3">
+          <div className="mbd:flex mbd:min-w-0 mbd:items-baseline mbd:gap-2">
             <span className="num mbd:text-[30px] mbd:font-semibold mbd:leading-none mbd:text-(--ink)">
               {state.isLoading ? '—' : total}
             </span>
@@ -306,39 +350,37 @@ const App: React.FC<AppProps> = ({
                   : 'items on this page'}
             </span>
           </div>
-          <div className="mbd:flex mbd:items-center mbd:gap-1.5">
-            {surface === 'popup' && (
-              <select
-                aria-label="Collection scope"
-                title="Which tabs to collect from"
-                value={scope}
-                onChange={(e) => {
-                  const next = e.target.value as CollectScope;
-                  if (next === 'selected') { setShowTabPicker(true); return; }
-                  changeScope(next);
-                }}
-                className="field mbd:shrink-0 mbd:py-0 mbd:text-[12px]"
-                style={{ height: 30 }}
-                disabled={state.isLoading}
-              >
-                <option value="active">This tab</option>
-                <option value="all-tabs">All tabs</option>
-                <option value="selected">{selectedTabIds.length > 0 ? `Selected (${selectedTabIds.length})` : 'Selected tabs…'}</option>
-              </select>
-            )}
+          <div className="collection-toolbar-actions mbd:flex mbd:min-w-0 mbd:max-w-full mbd:flex-wrap mbd:items-center mbd:justify-end mbd:gap-1.5">
+            <select
+              aria-label="Collection scope"
+              title="Which tabs to collect from"
+              value={scope}
+              onChange={(e) => {
+                const next = e.target.value as CollectScope;
+                if (next === 'selected') { setShowTabPicker(true); return; }
+                changeScope(next);
+              }}
+              className="field collection-scope-select mbd:min-w-0 mbd:max-w-full mbd:shrink mbd:py-0 mbd:text-[12px]"
+              style={{ height: 30, width: 140 }}
+              disabled={state.isLoading}
+            >
+              <option value="active">This tab</option>
+              <option value="all-tabs">All tabs</option>
+              <option value="selected">{selectedTabIds.length > 0 ? `Selected (${selectedTabIds.length})` : 'Selected tabs…'}</option>
+            </select>
             {deepScanning && (
-              <span className="num mbd:inline-flex mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
+              <span className="num mbd:inline-flex mbd:shrink-0 mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
                 {deepProgress?.found ?? 0} found
               </span>
             )}
             {nearDup.running && nearDup.progress && (
-              <span className="num mbd:inline-flex mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
+              <span className="num mbd:inline-flex mbd:shrink-0 mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
                 {nearDup.progress.done}/{nearDup.progress.total} hashing
               </span>
             )}
             <button
               onClick={handleDeepScan}
-              className="iconbtn"
+              className="iconbtn mbd:shrink-0"
               title={deepScanning ? 'Stop deep scan' : 'Deep scan (scroll to load more)'}
               aria-label={deepScanning ? 'Stop deep scan' : 'Deep scan'}
             >
@@ -349,19 +391,30 @@ const App: React.FC<AppProps> = ({
             {hasImages && !state.isLoading && (
               <button
                 onClick={() => (nearDup.running ? nearDup.cancel() : void nearDup.run())}
-                className="iconbtn"
+                className="iconbtn mbd:shrink-0"
                 title={nearDup.running ? 'Stop near-duplicate scan' : 'Find near-duplicates (fetches & hashes images)'}
                 aria-label={nearDup.running ? 'Stop near-duplicate scan' : 'Find near-duplicates'}
               >
                 <Square2StackIcon className={`mbd:h-4.5 mbd:w-4.5 ${nearDup.running ? 'mbd:animate-pulse' : ''}`} />
               </button>
             )}
-            <button onClick={() => { setStreamRefusal(null); fetchImages(); }} className="iconbtn" title="Rescan page" aria-label="Rescan page">
+            <button onClick={() => { setStreamRefusal(null); fetchImages(); }} className="iconbtn mbd:shrink-0" title="Rescan page" aria-label="Rescan page">
               <ArrowPathIcon className={`mbd:h-4.5 mbd:w-4.5 ${state.isLoading ? 'mbd:animate-[spin_0.9s_linear_infinite]' : ''}`} />
             </button>
           </div>
         </div>
       </header>
+
+      {!privacy.reviewComplete && (
+        <section className="mbd:flex mbd:items-center mbd:justify-between mbd:gap-3 mbd:border-b hairline mbd:bg-(--brand-soft) mbd:px-4 mbd:py-2.5" aria-label="Privacy review">
+          <p className="mbd:text-[11px] mbd:leading-relaxed mbd:text-(--ink-2)">
+            Automatic scanning and media-request observation are off until you review local privacy controls.
+          </p>
+          <button type="button" className="btn btn-ghost btn-sm mbd:shrink-0" onClick={() => { setSettingsInitialTab('privacy'); setShowSettings(true); }}>
+            Review privacy
+          </button>
+        </section>
+      )}
 
       {hasImages && !state.isLoading && (
         <FilterToolbar onFilterChange={onFilterChange} extensionSettings={perHost.effective} available={availableFilterOptions} initialFilters={filterSeed} nearDuplicateCount={nearDuplicateCount} pendingCount={pendingResolveCount} resetSignal={filterResetSignal} />
@@ -398,6 +451,8 @@ const App: React.FC<AppProps> = ({
             onToggleFavourite={handleToggleFavourite}
             onExclude={excludeItem}
             onFetchVideo={handleFetchVideo}
+            sankakuSessionEnabled={privacy.sankakuSessionResolution}
+            onOpenPrivacy={() => { setSettingsInitialTab('privacy'); setShowSettings(true); }}
             resolveFailedSrcs={resolveFailedSrcs}
             fetchingSrcs={fetchingSrcs}
             selectedSrcs={selectedSrcs}
@@ -433,9 +488,18 @@ const App: React.FC<AppProps> = ({
               <ProgressBar label={progress.label} done={progress.done} total={progress.total} />
             ) : (
             <p className="num mbd:min-w-0 mbd:truncate mbd:text-[11px] mbd:text-(--ink-2)">
-              {state.status ? (
+              {actionError || state.status ? (
                 <>
-                  {state.status}
+                  {actionError || state.status}
+                  {storageIssue && (
+                    <button
+                      type="button"
+                      onClick={() => void clearStoragePressure()}
+                      className="mbd:ml-1.5 mbd:text-(--brand-ink) mbd:underline-offset-2 mbd:hover:underline"
+                    >
+                      Free storage
+                    </button>
+                  )}
                   {selectedCount > 0 && (
                     <button onClick={handleClearSelection} className="mbd:ml-1.5 mbd:text-(--ink-3) mbd:underline-offset-2 mbd:hover:text-(--ink) mbd:hover:underline">
                       Clear
@@ -508,6 +572,9 @@ const App: React.FC<AppProps> = ({
           onClose={() => setShowSettings(false)}
           onSettingsChange={handleSettingsChange}
           settings={settings}
+          privacy={privacy}
+          onPrivacyChange={handlePrivacyChange}
+          initialTab={settingsInitialTab}
           perHost={{
             host: perHost.host,
             hasOverride: perHost.hasOverride,
@@ -527,6 +594,7 @@ const App: React.FC<AppProps> = ({
         <TabPickerPanel
           onClose={() => setShowTabPicker(false)}
           initialSelected={selectedTabIds}
+          loadTabs={loadTabs}
           onConfirm={(ids) => {
             setShowTabPicker(false);
             changeScope('selected', ids);

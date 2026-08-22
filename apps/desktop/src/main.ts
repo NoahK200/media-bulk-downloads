@@ -101,8 +101,8 @@ const routes = buildRoutes({
   sse,
   settings: () => settings2,
   setSettings: async (s) => {
-    settings2 = s;
-    await saveSettings(store, s);
+    settings2 = pickKnownSettings(settings2, s);
+    await saveSettings(store, settings2);
   },
   navigate: (url) => {
     void openAndInject(url);
@@ -126,7 +126,7 @@ const srv = await startServer({ assets: DASHBOARD_ASSETS, api: routes, sse: (req
 
 const dash = new Deno.BrowserWindow({ title: 'Media Bulk Downloads', width: 1180, height: 820 });
 dash.onclose = () => Deno.exit(0);
-dash.navigate(`http://127.0.0.1:${srv.port}/?token=${srv.token}`);
+dash.navigate(`http://127.0.0.1:${srv.port}/session/${srv.token}/`);
 
 // Page -> Deno command handlers. Each takes the JSON-string arg array the page
 // pushed and returns a JSON-serialisable result (or null). The result is

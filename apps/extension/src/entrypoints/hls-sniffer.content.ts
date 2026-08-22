@@ -1,5 +1,5 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { installReplayOnReady, installUrlSniffer } from '@mbd/core/resolvers/sniffers/response-sniffer';
+import { installReplayOnReady, installUrlSniffer, isObservationActive, onObservationStop } from '@mbd/core/resolvers/sniffers/response-sniffer';
 
 /**
  * MAIN-world content script (all sites). Runs in the page's own realm at
@@ -14,13 +14,17 @@ import { installReplayOnReady, installUrlSniffer } from '@mbd/core/resolvers/sni
 const HLS_RE = /\.(m3u8|mpd)(?:[?#]|$)/i;
 
 export default defineContentScript({
+  registration: 'runtime',
   matches: ['<all_urls>'],
   runAt: 'document_start',
   world: 'MAIN',
   main() {
     const SEEN_CAP = 500;
     const seen = new Set<string>();
-    const post = (urls: string[]): void => window.postMessage({ source: 'mbd-hls', urls }, location.origin);
+    const post = (urls: string[]): void => {
+      if (isObservationActive()) window.postMessage({ source: 'mbd-hls', urls }, location.origin);
+    };
+    onObservationStop(() => seen.clear());
     installUrlSniffer({
       isMatch: (url) => HLS_RE.test(url),
       onUrl: (url) => {
@@ -31,7 +35,7 @@ export default defineContentScript({
       },
     });
     installReplayOnReady('mbd-hls-ready', () => {
-      if (seen.size) post([...seen]);
+      if (isObservationActive() && seen.size) post([...seen]);
     });
   },
 });

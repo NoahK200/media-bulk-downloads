@@ -39,7 +39,7 @@ it('assembles an HLS stream into an object URL', async () => {
   captureHls.mockResolvedValue(result());
   const r = await runCaptureInProcess(req());
   expect(captureHls).toHaveBeenCalledTimes(1);
-  expect(r).toEqual({ ok: true, blobUrl: 'blob:mock', ext: 'mp4', segmentCount: 4, muxedAudio: true });
+  expect(r).toEqual(expect.objectContaining({ ok: true, blobUrl: 'blob:mock', ext: 'mp4', segmentCount: 4, muxedAudio: true }));
 });
 
 it('dispatches to the DASH engine when engine is dash', async () => {
@@ -47,7 +47,7 @@ it('dispatches to the DASH engine when engine is dash', async () => {
   const r = await runCaptureInProcess(req({ engine: 'dash' }));
   expect(captureDash).toHaveBeenCalledTimes(1);
   expect(captureHls).not.toHaveBeenCalled();
-  expect(r).toEqual({ ok: true, blobUrl: 'blob:mock', ext: 'mp4', segmentCount: 4, muxedAudio: false });
+  expect(r).toEqual(expect.objectContaining({ ok: true, blobUrl: 'blob:mock', ext: 'mp4', segmentCount: 4, muxedAudio: false }));
 });
 
 it('maps a typed HlsError to its code', async () => {

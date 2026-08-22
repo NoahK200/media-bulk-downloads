@@ -36,7 +36,7 @@ export function useDialog(onClose: () => void, active = true) {
       const list = Array.from(focusables);
       const first = list[0];
       const last = list[list.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {

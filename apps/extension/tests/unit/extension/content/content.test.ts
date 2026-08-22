@@ -27,6 +27,10 @@ const abs = (path: string): string => new URL(path, document.baseURI).href;
 
 describe('Content Script', () => {
   beforeEach(() => {
+    (chrome.runtime.sendMessage as Mock).mockImplementation((message: { type?: string }, callback?: (value: unknown) => void) => {
+      if (message?.type === 'GET_PASSIVE_SNIFFER_SNAPSHOT') callback?.({ ig: [], fb: [], pinterest: [], mangadex: [], hls: [] });
+      return Promise.resolve(undefined);
+    });
     document.body.innerHTML = `
         <img src="test1.jpg" alt="Test 1" width="100" height="100">
         <img src="test2.png" alt="Test 2" width="200" height="200" srcset="test2-small.png 300w, test2-large.png 1000w">
@@ -376,6 +380,9 @@ describe('Content Script', () => {
 
   describe('Performance', () => {
     it('handles a large number of images efficiently', async () => {
+      // Coverage instrumentation is part of the blocking CI run; the accepted
+      // instrumented baseline is 2.7 s, with a strict 20% regression ceiling.
+      const acceptedBaselineMs = 2_700;
       let html = '';
       for (let i = 0; i < 1000; i++) html += `<img src="test${i}.jpg" alt="Test ${i}">`;
       document.body.innerHTML += html;
@@ -383,7 +390,7 @@ describe('Content Script', () => {
       const images = collectMedia();
       const elapsed = performance.now() - start;
       expect(images.length).toBeGreaterThan(1000);
-      expect(elapsed).toBeLessThan(5000);
+      expect(elapsed).toBeLessThan(acceptedBaselineMs * 1.2);
     });
   });
 });
@@ -467,7 +474,10 @@ describe('Deep scan message handling', () => {
 
   it('streams progress to the popup, including the stop reason', async () => {
     const { handler, startDeepScan } = await wire();
-    (chrome.runtime.sendMessage as Mock).mockReset().mockResolvedValue(undefined);
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((message: { type?: string }, callback?: (value: unknown) => void) => {
+      if (message.type === 'GET_PASSIVE_SNIFFER_SNAPSHOT') callback?.({ ig: [], fb: [], pinterest: [], mangadex: [], hls: [] });
+      return Promise.resolve(undefined);
+    });
     startDeepScan.mockImplementation((onProgress: (f: number, s: number, e: number, r?: string) => void) => {
       onProgress(12, 3, 450, 'maxItems');
       return Promise.resolve([]);
@@ -483,7 +493,10 @@ describe('Deep scan message handling', () => {
 
   it('omits the reason field from an interim progress message', async () => {
     const { handler, startDeepScan } = await wire();
-    (chrome.runtime.sendMessage as Mock).mockReset().mockResolvedValue(undefined);
+    (chrome.runtime.sendMessage as Mock).mockReset().mockImplementation((message: { type?: string }, callback?: (value: unknown) => void) => {
+      if (message.type === 'GET_PASSIVE_SNIFFER_SNAPSHOT') callback?.({ ig: [], fb: [], pinterest: [], mangadex: [], hls: [] });
+      return Promise.resolve(undefined);
+    });
     startDeepScan.mockImplementation((onProgress: (f: number, s: number, e: number, r?: string) => void) => {
       onProgress(5, 1, 100);
       return Promise.resolve([]);
@@ -523,6 +536,7 @@ describe('Sniffer relay listeners (generic host)', () => {
     postSpy: MockInstance;
     ingestSniffedIgMedia: Mock;
     ingestSniffedHls: Mock;
+    hydrate: () => void;
   }
 
   let postSpy: MockInstance | undefined;
@@ -535,7 +549,7 @@ describe('Sniffer relay listeners (generic host)', () => {
     sendMessage.mockReset();
     sendMessage.mockReturnValue(Promise.resolve(undefined));
 
-    await import('@/extension/content');
+    await import('@/extension/content/sniffer-relay');
     sendMessage.mockClear();
 
     const messageHandlers = addSpy.mock.calls
@@ -545,6 +559,8 @@ describe('Sniffer relay listeners (generic host)', () => {
 
     const igMod = await import('@mbd/core/resolvers/sites/instagram');
     const hlsMod = await import('@mbd/core/resolvers/sniffers/hls-sniff');
+    const { clearSnifferBuffers, hydrateSnifferBuffers } = await import('@/extension/content/sniffer-hydrate');
+    clearSnifferBuffers();
     (igMod.ingestSniffedIgMedia as unknown as Mock).mockClear();
     (hlsMod.ingestSniffedHls as unknown as Mock).mockClear();
     return {
@@ -552,6 +568,7 @@ describe('Sniffer relay listeners (generic host)', () => {
       postSpy,
       ingestSniffedIgMedia: igMod.ingestSniffedIgMedia as unknown as Mock,
       ingestSniffedHls: hlsMod.ingestSniffedHls as unknown as Mock,
+      hydrate: hydrateSnifferBuffers,
     };
   };
 
@@ -575,20 +592,22 @@ describe('Sniffer relay listeners (generic host)', () => {
 
   describe('HLS relay', () => {
     it('feeds a valid mbd-hls envelope to ingestSniffedHls', async () => {
-      const { messageHandlers, ingestSniffedHls } = await loadContent();
+      const { messageHandlers, ingestSniffedHls, hydrate } = await loadContent();
       const urls = ['https://cdn.example.com/live/index.m3u8'];
       fire(messageHandlers, message({ source: 'mbd-hls', urls }));
+      hydrate();
       expect(ingestSniffedHls).toHaveBeenCalledWith(urls);
     });
 
     it('ignores a foreign window source, a foreign origin, a wrong tag, and a non-array urls', async () => {
-      const { messageHandlers, ingestSniffedHls } = await loadContent();
+      const { messageHandlers, ingestSniffedHls, hydrate } = await loadContent();
       fire(messageHandlers, message({ source: 'mbd-hls', urls: [] }, { source: {} }));
       fire(messageHandlers, message({ source: 'mbd-hls', urls: [] }, { origin: 'https://evil.example' }));
       fire(messageHandlers, message({ source: 'mbd-not-hls', urls: [] }));
       fire(messageHandlers, message({ source: 'mbd-hls', urls: 5 }));
       fire(messageHandlers, message(null));
-      expect(ingestSniffedHls).not.toHaveBeenCalled();
+      hydrate();
+      expect(ingestSniffedHls).toHaveBeenCalledWith([]);
     });
 
     it('posts mbd-hls-ready on registration so the sniffer replays earlier manifests', async () => {
@@ -599,7 +618,7 @@ describe('Sniffer relay listeners (generic host)', () => {
 
   describe('host gating (neither X nor Instagram)', () => {
     it('wires only the HLS relay on a generic host', async () => {
-      expect((await loadContent()).messageHandlers).toHaveLength(1);
+      expect((await loadContent()).messageHandlers).toHaveLength(2);
     });
 
     it('does not forward a valid X envelope (X relay not wired here)', async () => {
@@ -609,9 +628,10 @@ describe('Sniffer relay listeners (generic host)', () => {
     });
 
     it('does not forward a valid IG envelope (IG relay not wired here)', async () => {
-      const { messageHandlers, ingestSniffedIgMedia } = await loadContent();
+      const { messageHandlers, ingestSniffedIgMedia, hydrate } = await loadContent();
       fire(messageHandlers, message({ source: 'mbd-ig-media', entries: [{ code: 'ABC', kind: 'image', url: 'u' }] }));
-      expect(ingestSniffedIgMedia).not.toHaveBeenCalled();
+      hydrate();
+      expect(ingestSniffedIgMedia).toHaveBeenCalledWith([]);
     });
   });
 });

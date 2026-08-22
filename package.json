@@ -1,7 +1,7 @@
 {
   "name": "@mralaminahamed/media-bulk-downloads",
   "private": true,
-  "version": "1.3.0",
+  "version": "1.4.0",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -45,22 +45,26 @@
     "zip:edge": "yarn workspace @mbd/extension zip:edge",
     "zip:safari": "yarn workspace @mbd/extension zip:safari",
     "zip:all": "yarn workspace @mbd/extension zip:all",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "lint:firefox": "yarn workspace @mbd/extension lint:firefox",
-    "type-check": "tsc -b packages/core packages/storage packages/platform && tsc --noEmit -p tsconfig.test.json && yarn workspace @mbd/extension type-check",
+    "verify:versions": "node scripts/verify-versions.mjs",
+    "verify:manifests": "node scripts/verify-manifests.mjs",
+    "verify:bundles": "node scripts/verify-bundle-budgets.mjs",
+    "release:evidence": "node scripts/generate-release-evidence.mjs",
+    "type-check": "yarn verify:versions && tsc -b packages/core packages/storage packages/platform && tsc --noEmit -p tsconfig.test.json && yarn workspace @mbd/extension type-check",
     "test": "vitest run --coverage && yarn workspace @mbd/extension test",
     "test:watch": "vitest",
     "test:e2e": "yarn workspace @mbd/extension test:e2e",
     "test:e2e:headed": "yarn workspace @mbd/extension test:e2e:headed"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
+    "@eslint/js": "9.39.4",
     "@types/node": "^26.1.1",
     "@typescript-eslint/eslint-plugin": "^8.65.0",
     "@typescript-eslint/parser": "^8.65.0",
     "@vitest/coverage-v8": "^4.1.10",
-    "eslint": "^10.6.0",
+    "eslint": "9.39.4",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
@@ -69,6 +73,8 @@
     "vitest": "^4.1.10"
   },
   "resolutions": {
+    "@eslint/js": "9.39.4",
+    "eslint": "9.39.4",
     "@types/node": "^26.1.1",
     "typescript": "^6.0.3",
     "vite": "^8.1.4",

@@ -59,4 +59,15 @@ describe('TabPickerPanel', () => {
     render(<TabPickerPanel onClose={() => {}} onConfirm={() => {}} loadTabs={loadTabs([])} />);
     expect(await screen.findByText(/No scannable tabs/i)).toBeInTheDocument();
   });
+
+  it('shows a local error when tabs cannot be listed', async () => {
+    render(
+      <TabPickerPanel
+        onClose={() => {}}
+        onConfirm={() => {}}
+        loadTabs={() => Promise.reject(new Error('Open tabs are unavailable.'))}
+      />,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('Open tabs are unavailable.');
+  });
 });

@@ -1,10 +1,13 @@
-import { ImageInfo } from '@mbd/core/types';
+import type { ImageInfo, MultiTabCollectionOptions, MultiTabCollectionResult, OpenTabInfo } from '@mbd/core/types';
+export type { OpenTabInfo } from '@mbd/core/types';
 import { dedupeByCanonical } from '@mbd/core/collection/multiTab';
 import { mapWithConcurrency } from '@/extension/popup/utils';
+import { ensureContentScript } from '@/extension/shared/active-tab/runtime-content';
 
 /** Cap on concurrent per-tab GET_IMAGES sends, so scanning many tabs doesn't fan
  *  out into dozens of simultaneous collect runs. */
 const TAB_SCAN_CONCURRENCY = 5;
+export const MAX_MULTI_TAB_COUNT = 50;
 /** Per-tab budget. An unresponsive tab (no live content script, not fully loaded,
  *  or a heavy page) is abandoned after this and counted as skipped, never stalling
  *  the batch. */
@@ -17,18 +20,15 @@ function isEligibleTab(tab: chrome.tabs.Tab): tab is chrome.tabs.Tab & { id: num
   return typeof tab.id === 'number' && !tab.discarded && !!tab.url && /^https?:/i.test(tab.url);
 }
 
-/** A picker-friendly view of an eligible tab. */
-export interface OpenTabInfo {
-  id: number;
-  title: string;
-  url: string;
-  favIconUrl?: string;
-}
-
 /** Messages one tab's content script for its media, resolving null on any failure
  *  (no content script, runtime error, or timeout) so the caller can count it as
  *  skipped. Mirrors collect-active-tab's GET_IMAGES send, plus a timeout race. */
-function sendGetImages(tabId: number): Promise<ImageInfo[] | null> {
+async function sendGetImages(tabId: number): Promise<ImageInfo[] | null> {
+  try {
+    await ensureContentScript(tabId);
+  } catch {
+    return null;
+  }
   return new Promise((resolve) => {
     let settled = false;
     const finish = (v: ImageInfo[] | null): void => {
@@ -39,7 +39,7 @@ function sendGetImages(tabId: number): Promise<ImageInfo[] | null> {
     };
     const timer = setTimeout(() => finish(null), TAB_SCAN_TIMEOUT_MS);
     try {
-      chrome.tabs.sendMessage(tabId, 'GET_IMAGES', (images: ImageInfo[]) => {
+      chrome.tabs.sendMessage(tabId, { type: 'GET_IMAGES', allowNetwork: true }, (images: ImageInfo[]) => {
         if (chrome.runtime.lastError) return finish(null);
         finish(Array.isArray(images) ? images : []);
       });
@@ -50,22 +50,14 @@ function sendGetImages(tabId: number): Promise<ImageInfo[] | null> {
 }
 
 /** Eligible tabs in the current window, for the "Selected tabs" picker. */
-export async function listOpenTabs(): Promise<OpenTabInfo[]> {
-  const all = await chrome.tabs.query({ currentWindow: true });
-  return all.filter(isEligibleTab).map((t) => ({
+export async function listOpenTabs(windowId?: number): Promise<OpenTabInfo[]> {
+  const all = await chrome.tabs.query(windowId == null ? { currentWindow: true } : { windowId });
+  return all.filter(isEligibleTab).slice(0, MAX_MULTI_TAB_COUNT).map((t) => ({
     id: t.id,
     title: t.title?.trim() || t.url,
     url: t.url,
     favIconUrl: t.favIconUrl,
   }));
-}
-
-export interface MultiTabResult {
-  items: ImageInfo[];
-  /** Tabs that returned media successfully. */
-  scanned: number;
-  /** Tabs skipped: ineligible scheme/discarded, or failed/timed-out. */
-  skipped: number;
 }
 
 /**
@@ -77,12 +69,15 @@ export interface MultiTabResult {
  * tabs are counted in `skipped`, never fatal.
  */
 export async function collectOpenTabs(
-  opts: { tabIds?: number[]; onProgress?: (done: number, total: number) => void } = {},
-): Promise<MultiTabResult> {
-  const all = await chrome.tabs.query({ currentWindow: true });
+  opts: MultiTabCollectionOptions & { windowId?: number } = {},
+): Promise<MultiTabCollectionResult> {
+  const all = await chrome.tabs.query(opts.windowId == null ? { currentWindow: true } : { windowId: opts.windowId });
   const wanted = opts.tabIds ? all.filter((t) => typeof t.id === 'number' && opts.tabIds!.includes(t.id)) : all;
-  const eligible = wanted.filter(isEligibleTab);
-  const ineligible = wanted.length - eligible.length;
+  const allEligible = wanted.filter(isEligibleTab);
+  const eligible = allEligible.slice(0, MAX_MULTI_TAB_COUNT);
+  const ineligible = wanted.length - allEligible.length;
+  const missing = opts.tabIds ? Math.max(0, opts.tabIds.length - wanted.length) : 0;
+  const overLimit = Math.max(0, allEligible.length - eligible.length);
 
   const total = eligible.length;
   let done = 0;
@@ -103,6 +98,6 @@ export async function collectOpenTabs(
   return {
     items: dedupeByCanonical(perTab.flat()),
     scanned: total - failed,
-    skipped: ineligible + failed,
+    skipped: ineligible + missing + overLimit + failed,
   };
 }

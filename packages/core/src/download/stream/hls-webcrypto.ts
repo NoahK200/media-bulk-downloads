@@ -1,6 +1,7 @@
 import { DecryptFn, HlsDeps, HlsByteRange } from '@mbd/core/download/stream/hls';
 import { retryingFetch, FETCH_TIMEOUT_MS } from '@mbd/core/net/retry';
 import { readBounded, readBoundedText } from '@mbd/core/download/stream/bounded-fetch';
+import { MANIFEST_MAX_BYTES, RESPONSE_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 
 /**
  * AES-128-CBC decrypt via the platform WebCrypto. HLS segments are PKCS7-padded,
@@ -30,7 +31,7 @@ export function browserHlsDeps(onProgress?: (done: number, total: number) => voi
     fetchText: async (url) => {
       const res = await netFetch(url);
       if (!res.ok) throw new Error(`Manifest fetch failed (${res.status}).`);
-      return readBoundedText(res);
+      return readBoundedText(res, MANIFEST_MAX_BYTES);
     },
     fetchBytes: async (url, range?: HlsByteRange) => {
       const init = range
@@ -38,14 +39,14 @@ export function browserHlsDeps(onProgress?: (done: number, total: number) => voi
         : undefined;
       const res = await netFetch(url, init);
       if (!res.ok && res.status !== 206) throw new Error(`Segment fetch failed (${res.status}).`);
-      const bytes = await readBounded(res);
+      const bytes = await readBounded(res, RESPONSE_MAX_BYTES);
       if (range && res.status !== 206 && bytes.length > range.length) {
         return bytes.subarray(range.offset, range.offset + range.length);
       }
       return bytes;
     },
     decrypt: webcryptoDecrypt,
-    concurrency: 6,
+    concurrency: 4,
     onProgress,
   };
 }

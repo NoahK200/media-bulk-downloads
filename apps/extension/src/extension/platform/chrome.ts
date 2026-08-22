@@ -27,7 +27,11 @@ export const chromeDownloader: Downloader = {
     new Promise((resolve) =>
       chrome.downloads.download(
         { url: req.url, filename: req.filename, saveAs: req.saveAs, conflictAction: req.conflictAction },
-        (id) => resolve(chrome.runtime.lastError || id === undefined ? undefined : id),
+        (id) => resolve(
+          chrome.runtime.lastError || id === undefined
+            ? { kind: 'failed', code: chrome.runtime.lastError?.message || 'download-rejected' }
+            : { kind: 'tracked', id },
+        ),
       ),
     ),
   search: async (q) => (await chrome.downloads.search({ id: q.id, limit: q.limit })).map(toRecord),
@@ -130,5 +134,8 @@ export const chromeCaptureHost: StreamCaptureHost = {
       audioFormat: req.audioFormat,
     })) as CaptureRunResult | undefined;
     return result ?? { ok: false, code: 'unknown' };
+  },
+  cleanup: async (cleanupToken) => {
+    try { await chrome.runtime.sendMessage({ type: 'CAPTURE_CLEANUP', cleanupToken }); } catch { /* host already gone */ }
   },
 };

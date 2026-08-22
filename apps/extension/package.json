@@ -1,6 +1,6 @@
 {
   "name": "@mbd/extension",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "The WXT browser-extension app — builds Chrome/Edge/Opera/Firefox (and, in future, Safari) from one codebase. Consumes @mbd/core, @mbd/storage, @mbd/platform.",
@@ -19,11 +19,12 @@
     "zip:safari": "wxt zip -b safari",
     "zip:all": "wxt zip && wxt zip -b firefox && wxt zip -b edge",
     "postinstall": "wxt prepare",
-    "lint:firefox": "web-ext lint --source-dir .output/firefox-mv3",
+    "lint:firefox": "node ../../scripts/verify-firefox-lint.mjs",
     "type-check": "wxt prepare && tsc --noEmit",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "wxt build && playwright test",
+    "test:e2e:ci": "wxt build && playwright test --repeat-each=2",
     "test:e2e:headed": "wxt build && playwright test --headed"
   },
   "dependencies": {
@@ -49,8 +50,9 @@
     "@wxt-dev/module-react": "^1.2.2",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^29.1.1",
-    "postcss": "^8.5.16",
+    "postcss": "^8.5.26",
     "tailwindcss": "^4.3.2",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10",
     "web-ext": "^10.5.0",
     "wxt": "^0.20.27"

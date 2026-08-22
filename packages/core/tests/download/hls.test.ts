@@ -549,7 +549,7 @@ audio/a.m3u8
 
   it('maps a StreamTooLargeError from a single response to too-large, not fetch-failed', async () => {
     const deps = fakeDeps({ fetchBytes: async () => { throw new StreamTooLargeError(); } }, { 'index.m3u8': MEDIA_TS });
-    await expect(captureHls('https://cdn.test/v/index.m3u8', deps)).rejects.toMatchObject({ code: 'too-large' });
+    await expect(captureHls('https://cdn.test/v/index.m3u8', deps)).rejects.toMatchObject({ code: 'response-too-large' });
   });
 
   it('throws fetch-failed when the AES-128 key is not 16 bytes', async () => {

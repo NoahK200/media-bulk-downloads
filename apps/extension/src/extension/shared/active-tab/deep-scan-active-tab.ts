@@ -1,4 +1,5 @@
 import { MediaItem, DeepScanProgress } from '@mbd/core/types';
+import { ensureContentScript } from '@/extension/shared/active-tab/runtime-content';
 
 let activeScanTabId: number | null = null;
 
@@ -9,6 +10,7 @@ export async function deepScanActiveTab(
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('No active tab found.');
   const tabId = tab.id;
+  await ensureContentScript(tabId);
   activeScanTabId = tabId;
 
   const listener = (msg: unknown, sender: chrome.runtime.MessageSender) => {

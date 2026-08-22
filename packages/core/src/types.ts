@@ -72,8 +72,62 @@ export type MediaItem = ImageInfo;
 
 /** Which tabs a collection run reads (#283). 'active' = the current tab only
  *  (default, popup + bubble); 'all-tabs' = every eligible tab in the current
- *  window; 'selected' = a user-picked subset (popup only). */
+ *  window; 'selected' = a user-picked subset. */
 export type CollectScope = 'active' | 'all-tabs' | 'selected';
+
+/** Picker-safe metadata for a tab that can be scanned. */
+export interface OpenTabInfo {
+  id: number;
+  title: string;
+  url: string;
+  favIconUrl?: string;
+}
+
+export interface MultiTabCollectionResult {
+  items: ImageInfo[];
+  scanned: number;
+  skipped: number;
+}
+
+export interface MultiTabCollectionOptions {
+  tabIds?: number[];
+  onProgress?: (done: number, total: number) => void;
+  /** Used by embedded surfaces to stop observing a request after unmount. */
+  signal?: AbortSignal;
+}
+
+export type MultiTabCollector = (options?: MultiTabCollectionOptions) => Promise<MultiTabCollectionResult>;
+export type OpenTabLoader = () => Promise<OpenTabInfo[]>;
+
+/** Bubble -> background: list eligible tabs in the bubble's own window. */
+export interface ListOpenTabsMessage {
+  type: 'LIST_OPEN_TABS';
+}
+
+/** Bubble -> background: explicitly scan all or selected tabs in its own window. */
+export interface CollectOpenTabsMessage {
+  type: 'COLLECT_OPEN_TABS';
+  requestId: string;
+  tabIds?: number[];
+}
+
+/** Background -> bubble progress relay for one multi-tab request. */
+export interface CollectOpenTabsProgressMessage {
+  type: 'COLLECT_OPEN_TABS_PROGRESS';
+  requestId: string;
+  done: number;
+  total: number;
+}
+
+export type MultiTabBridgeErrorCode = 'no-origin-tab' | 'unavailable' | 'unknown';
+
+export type ListOpenTabsResponse =
+  | { ok: true; tabs: OpenTabInfo[] }
+  | { ok: false; code: MultiTabBridgeErrorCode; message: string };
+
+export type CollectOpenTabsResponse =
+  | ({ ok: true } & MultiTabCollectionResult)
+  | { ok: false; code: MultiTabBridgeErrorCode; message: string };
 
 export interface DownloadMessage {
   type: 'DOWNLOAD_IMAGES';
@@ -129,14 +183,42 @@ export interface BackupData {
   favourites: FavouriteEntry[];
   history: HistoryEntry[];
   excluded: ExcludedEntry[];
+  /** Present on import when invalid settings were repaired. Not exported. */
+  repairs?: SettingsRepair[];
 }
+
+export interface SettingsRepair {
+  key: string;
+  reason: 'wrong-type' | 'invalid-enum' | 'out-of-range' | 'too-long';
+}
+
+/** Local-only privacy consent. This is intentionally excluded from sync,
+ * backups, and the IndexedDB durability mirror: a missing value must fail closed
+ * and require approval on each browser installation. */
+export interface PrivacyPreferences {
+  version: 1;
+  reviewComplete: boolean;
+  automaticBadgeScanning: boolean;
+  observeMediaRequests: boolean;
+  sankakuSessionResolution: boolean;
+}
+
+/** Outcome of a state write whose primary browser-storage copy must persist. */
+export type PersistenceResult =
+  | { ok: true }
+  | { ok: false; code: 'quota' | 'unavailable' | 'unknown' };
+
+/** Standard acknowledgement for state-changing runtime messages. */
+export type MutationResponse =
+  | { status: 'success'; message?: string }
+  | { status: 'error'; code: string; message: string };
 
 export interface DownloadResponse {
   status: 'success' | 'error';
   message: string;
 }
 
-export type GetImagesMessage = 'GET_IMAGES';
+export type GetImagesMessage = 'GET_IMAGES' | { type: 'GET_IMAGES'; allowNetwork?: boolean };
 
 /** Sent to the content script to toggle the on-page bubble open/closed. */
 export type ToggleBubbleMessage = 'TOGGLE_BUBBLE';
@@ -178,11 +260,12 @@ export interface DeepScanProgress {
 export interface ResolveOriginalsMessage {
   type: 'RESOLVE_ORIGINALS';
   hints: { src: string; hint: ResolveHint }[];
-  /** Opt-in marker: when true, the batch is allowed to run the authenticated
-   *  Sankaku resolve. The passive auto-resolve path never sets it, so browsing
-   *  never triggers an authed API call. */
-  authed?: boolean;
+  /** Narrow credential capabilities approved for this request. The background
+   * re-authorizes every scope against local privacy preferences. */
+  credentialScopes?: ResolveCredentialScope[];
 }
+
+export type ResolveCredentialScope = 'sankaku-session';
 
 export interface ResolveOriginalsResponse {
   resolved: Record<string, ResolvedMedia>;
@@ -194,6 +277,14 @@ export interface XMediaSeenMessage {
   type: 'X_MEDIA_SEEN';
   pairs: [string, ResolvedMedia][];
 }
+
+export type PassiveSnifferKind = 'ig' | 'fb' | 'pinterest' | 'mangadex' | 'hls';
+export interface PassiveSnifferSeenMessage {
+  type: 'PASSIVE_SNIFFER_SEEN';
+  kind: PassiveSnifferKind;
+  entries: unknown[];
+}
+export type GetPassiveSnifferSnapshotMessage = { type: 'GET_PASSIVE_SNIFFER_SNAPSHOT' };
 
 /** Open a downloaded file in the OS default app (chrome.downloads.open). */
 export interface OpenDownloadMessage {
@@ -395,6 +486,27 @@ export interface CaptureRunMessage {
   audioFormat?: AudioFormat;
 }
 
+export interface CaptureCleanupMessage {
+  type: 'CAPTURE_CLEANUP';
+  cleanupToken: string;
+}
+
+export interface CaptureArtifact {
+  url: string;
+  size: number;
+  backing: 'memory' | 'opfs';
+  cleanupToken: string;
+}
+
+export interface CaptureSink {
+  readonly size: number;
+  readonly limit: number;
+  readonly backing: CaptureArtifact['backing'];
+  write(chunk: Uint8Array): Promise<void>;
+  finalize(mime: string, ext: string): Promise<CaptureArtifact>;
+  abort(): Promise<void>;
+}
+
 /** Offscreen → all contexts (the popup listens): capture progress. */
 export interface CaptureProgressMessage {
   type: 'CAPTURE_PROGRESS';
@@ -402,12 +514,14 @@ export interface CaptureProgressMessage {
   runId: string;
   done: number;
   total: number;
+  bytesDone?: number;
+  bytesLimit?: number;
 }
 
 /** Offscreen → background: the capture outcome. On success the blob URL is
  *  same-extension origin, read by the background's chrome.downloads. */
 export type CaptureRunResult =
-  | { ok: true; blobUrl: string; ext: string; segmentCount: number; muxedAudio: boolean }
+  | { ok: true; blobUrl: string; ext: string; segmentCount: number; muxedAudio: boolean; size?: number; backing?: 'memory' | 'opfs'; cleanupToken?: string }
   | { ok: false; code: string };
 
 /** Background → popup: the fully-composed status line for a capture. On a
@@ -460,6 +574,12 @@ export interface SaveScanMemoryMessage {
  *  bubble would never mount. The response is the current SettingsData. */
 export type GetSettingsMessage = { type: 'GET_SETTINGS' };
 
+export type GetPrivacyPreferencesMessage = { type: 'GET_PRIVACY_PREFERENCES' };
+export interface SetPrivacyPreferencesMessage {
+  type: 'SET_PRIVACY_PREFERENCES';
+  patch: Partial<Omit<PrivacyPreferences, 'version'>>;
+}
+
 /** The background pushes the merged settings to a tab's content script after
  *  every SET_SETTINGS write, so the on-page bubble mounts/unmounts live. This
  *  replaces the content script's storage.onChanged listener, which does not fire
@@ -483,8 +603,6 @@ export interface QueueRetryMessage {
    *  the popup to have obtained the optional declarativeNetRequestWithHostAccess permission. */
   referer?: boolean;
 }
-export type QueueGetMessage = { type: 'QUEUE_GET' };
-
 /** Clear all finished (done/failed) queue items. Routed through the background
  *  (single writer for the queue). */
 export type QueueClearMessage = { type: 'QUEUE_CLEAR' };
@@ -504,7 +622,6 @@ export type ChromeMessage =
   | QueueResumeMessage
   | QueueCancelMessage
   | QueueRetryMessage
-  | QueueGetMessage
   | QueueClearMessage
   | QueueOpenMessage
   | DownloadZipMessage
@@ -512,6 +629,10 @@ export type ChromeMessage =
   | DownloadBytesMessage
   | RestoreDataMessage
   | GetSettingsMessage
+  | GetPrivacyPreferencesMessage
+  | SetPrivacyPreferencesMessage
+  | ListOpenTabsMessage
+  | CollectOpenTabsMessage
   | SettingsChangedMessage
   | GetImagesMessage
   | ToggleBubbleMessage
@@ -520,6 +641,8 @@ export type ChromeMessage =
   | DeepScanProgress
   | ResolveOriginalsMessage
   | XMediaSeenMessage
+  | PassiveSnifferSeenMessage
+  | GetPassiveSnifferSnapshotMessage
   | OpenDownloadMessage
   | ShowDownloadMessage
   | GetDownloadedSrcsMessage
@@ -572,7 +695,6 @@ export interface SettingsData {
   fileNamePrefix: string;
   popupWidth: number;
   popupHeight: number;
-  showImageCount: boolean;
   minimumImageSize: number;
   excludeBase64Images: boolean;
   /** Hide emoji graphics (twemoji from Twitter/WordPress/GitHub/etc.). */
@@ -604,10 +726,6 @@ export interface SettingsData {
   /** Custom panel top-left, used when the placement is `free`. */
   bubblePanelPoint: BubblePanelPoint;
   resolveOriginals: boolean;
-  /** Tier-2: enable the opt-in authenticated Sankaku "download originals" action
-   *  (grid originals via the per-post detail API). Default off; consumed by the
-   *  popup to show the action. Never triggers an authed call on its own. */
-  sankakuAuthedOriginals: boolean;
   /** Surface HLS (`.m3u8`) AND DASH (`.mpd`) streams as capture items (the gate
    *  covers both). Off by default — capturing a stream fetches and assembles every
    *  segment (slow, memory-heavy), so it's an explicit opt-in rather than something
@@ -706,6 +824,10 @@ export interface AppProps {
   deepScan?: (onProgress: (p: DeepScanProgress) => void) => Promise<ImageInfo[]>;
   /** Aborts an in-flight deep scan. Defaults to messaging the active tab (popup). */
   abortDeepScan?: () => void;
+  /** How to collect from all/selected tabs. Defaults to the popup's direct tab API path. */
+  collectTabs?: MultiTabCollector;
+  /** How to populate the selected-tabs picker. Defaults to the popup's direct tab API path. */
+  loadTabs?: OpenTabLoader;
   /** Which surface this app renders in. */
   surface?: 'popup' | 'bubble';
   /** When embedded (bubble), a close handler for the header. */
@@ -731,6 +853,10 @@ export interface ImageListProps {
   onExclude?: (image: ImageInfo, kind: ExcludedKind) => void;
   /** Resolve one pending video's real file on demand (per-item "Get video"). */
   onFetchVideo?: (image: ImageInfo) => void;
+  /** Local-only consent state for authenticated Sankaku resolution. */
+  sankakuSessionEnabled?: boolean;
+  /** Open Settings directly to the Privacy consent controls. */
+  onOpenPrivacy?: () => void;
   /** Capture a stream item as audio-only (per-item "Audio only", #204). Saved as
    *  `.m4a`, or re-encoded to MP3 when a `formatOverride` is passed (#321). */
   onCaptureAudio?: (image: ImageInfo, formatOverride?: AudioFormat) => void;
@@ -756,8 +882,11 @@ export interface ImageListProps {
 
 export interface SettingsProps {
   onClose: () => void;
-  onSettingsChange: (newSettings: SettingsData) => void;
+  onSettingsChange: (newSettings: SettingsData) => Promise<MutationResponse> | void;
   settings: SettingsData;
+  privacy?: PrivacyPreferences;
+  onPrivacyChange?: (privacy: PrivacyPreferences) => Promise<MutationResponse> | void;
+  initialTab?: 'downloads' | 'media' | 'display' | 'privacy' | 'data';
   /** Per-host override controls (#293). Absent → the row is hidden entirely. */
   perHost?: {
     host: string;

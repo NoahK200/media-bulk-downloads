@@ -7,41 +7,139 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  immutable-install:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
+      - run: yarn lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
+      - run: yarn type-check
+
+  unit-integration-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
+      - run: yarn test
+      - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  production-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
+      - run: yarn npm audit --all --recursive --environment production --severity moderate
+
+  browser-build:
     strategy:
       matrix:
-        node-version: [22.x]
+        include:
+          - target: chrome-mv3
+            command: build
+          - target: firefox-mv3
+            command: build:firefox
+          - target: edge-mv3
+            command: build:edge
+          - target: safari-mv3
+            command: build:safari
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
+      - run: yarn ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: apps/extension/.output/${{ matrix.target }}
 
+  generated-contracts:
+    needs: browser-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: yarn }
+      - run: yarn install --immutable
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: apps/extension/.output
+          merge-multiple: false
+      - name: Normalize downloaded target directories
+        run: |
+          for d in apps/extension/.output/build-*; do
+            target="${d##*/build-}"
+            mv "$d" "apps/extension/.output/$target"
+          done
+      - run: yarn verify:manifests
+      - run: yarn verify:bundles
+      - run: yarn lint:firefox
+
+  e2e:
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
-    - name: Enable Corepack
-      run: corepack enable
-
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
+    - run: corepack enable
+    - uses: actions/setup-node@v4
       with:
-        node-version: ${{ matrix.node-version }}
+        node-version: 22.x
         cache: yarn
+    - run: yarn install --immutable
+    - name: Install pinned Chromium
+      run: yarn workspace @mbd/extension playwright install --with-deps chromium
+    - name: Run built-extension E2E
+      run: yarn workspace @mbd/extension test:e2e:ci
+    - name: Upload Playwright traces
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: playwright-traces
+        path: apps/extension/test-results
 
-    - name: Install dependencies
-      run: yarn install --immutable
-
-    - name: Lint
-      run: yarn lint
-
-    - name: Type check
-      run: yarn type-check
-
-    - name: Run tests
-      run: yarn test
-
-    - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v4
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-    - name: Build
-      run: yarn build
+  desktop:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: denoland/setup-deno@v2
+      with:
+        deno-version: v2.9.5
+    - name: Check desktop
+      run: deno task --config apps/desktop/deno.json check
+    - name: Test desktop
+      run: deno task --config apps/desktop/deno.json test

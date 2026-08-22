@@ -1,14 +1,15 @@
 import { assert, assertEquals, assertThrows } from 'jsr:@std/assert';
-import { SEPARATOR } from 'jsr:@std/path';
+import { join, normalize, SEPARATOR } from 'jsr:@std/path';
 import { containedPath } from '../../src/platform/paths.ts';
 
 Deno.test('containedPath resolves a normal relative path under root', () => {
   const path = containedPath('/root', 'ex.com/video_1.mp4');
+  const root = normalize('/root');
   assert(
-    path.startsWith(`/root${SEPARATOR}`),
+    path.startsWith(`${root}${SEPARATOR}`),
     `expected path under root, got ${path}`,
   );
-  assertEquals(path, `/root${SEPARATOR}ex.com${SEPARATOR}video_1.mp4`);
+  assertEquals(path, join(root, 'ex.com', 'video_1.mp4'));
 });
 
 Deno.test('containedPath throws on a traversal that escapes root', () => {

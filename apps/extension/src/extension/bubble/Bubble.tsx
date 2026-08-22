@@ -8,6 +8,8 @@ import { startDeepScan } from '@/extension/content/deepScanRunner';
 import { ensureShopifyProduct } from '@/extension/content/shopify-product';
 import App from '@/extension/popup/App';
 import { BrandMark } from '@/extension/components/BrandMark';
+import { syncSnifferBuffers } from '@/extension/content/sniffer-hydrate';
+import { collectOpenTabsFromBackground, listOpenTabsFromBackground } from '@/extension/bubble/multi-tab';
 
 interface BubbleProps {
   initialSettings: SettingsData;
@@ -140,7 +142,8 @@ const Bubble: React.FC<BubbleProps> = ({ initialSettings }) => {
 
   const collectLocal = useCallback(async (): Promise<ImageInfo[]> => {
     const s = effectiveRef.current;
-    await ensureShopifyProduct(location.href);
+    if (s.resolveOriginals) await ensureShopifyProduct(location.href);
+    await syncSnifferBuffers();
     return collectMedia(undefined, { smartPageDefaults: s.smartPageDefaults, resolveOriginals: s.resolveOriginals });
   }, []);
 
@@ -149,7 +152,8 @@ const Bubble: React.FC<BubbleProps> = ({ initialSettings }) => {
     const ac = new AbortController();
     deepScanAbortRef.current = ac;
     const s = effectiveRef.current;
-    await ensureShopifyProduct(location.href);
+    if (s.resolveOriginals) await ensureShopifyProduct(location.href);
+    await syncSnifferBuffers();
     return startDeepScan(
       (found, scrolls, elapsedMs, reason) => {
         const p: DeepScanProgress = { type: 'DEEP_SCAN_PROGRESS', found, scrolls, elapsedMs };
@@ -347,6 +351,8 @@ const Bubble: React.FC<BubbleProps> = ({ initialSettings }) => {
               collect={collectLocal}
               deepScan={deepScanLocal}
               abortDeepScan={abortDeepScanLocal}
+              collectTabs={collectOpenTabsFromBackground}
+              loadTabs={listOpenTabsFromBackground}
               surface="bubble"
               onClose={() => setOpen(false)}
               dragHandleProps={{

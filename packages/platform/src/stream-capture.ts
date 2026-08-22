@@ -28,7 +28,7 @@ export interface CaptureRunRequest {
 /** Result of a capture run — an object URL for the assembled file, or a failure
  *  code. Mirrors @mbd/core's CaptureRunResult so the app can reuse it. */
 export type CaptureRunResult =
-  | { ok: true; blobUrl: string; ext: string; segmentCount: number; muxedAudio: boolean }
+  | { ok: true; blobUrl: string; ext: string; segmentCount: number; muxedAudio: boolean; size?: number; backing?: 'memory' | 'opfs'; cleanupToken?: string }
   | { ok: false; code: string };
 
 export interface StreamCaptureHost {
@@ -42,4 +42,6 @@ export interface StreamCaptureHost {
    *  failure code). Chrome dispatches to the offscreen doc; Firefox/Safari run
    *  the engine in their own DOM-capable context. */
   run(request: CaptureRunRequest): Promise<CaptureRunResult>;
+  /** Revoke the artifact URL and remove any temporary file. Idempotent. */
+  cleanup(cleanupToken: string): Promise<void>;
 }

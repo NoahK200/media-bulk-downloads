@@ -3,9 +3,9 @@ import { openBubblePage, openPanel, itemCount } from '../helpers/bubble';
 import type { Page, Locator } from '@playwright/test';
 
 const itemByAlt = (page: Page, alt: string) =>
-  page.locator('figure', { has: page.locator(`img[alt="${alt}"]`) });
+  page.locator(`figure[data-media-alt="${alt}"]`);
 const fbItem = (page: Page) =>
-  page.locator('figure', { has: page.locator('img[src*="fbcdn"]') });
+  page.locator('figure[data-media-src*="fbcdn"]');
 const previewModal = (page: Page) => page.locator('[role="dialog"][aria-modal="true"]');
 
 async function openPreview(page: Page, item: Locator): Promise<void> {

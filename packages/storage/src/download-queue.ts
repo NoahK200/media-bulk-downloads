@@ -1,4 +1,4 @@
-import type { HistoryEntry } from '@mbd/core/types';
+import type { HistoryEntry, PersistenceResult } from '@mbd/core/types';
 import { durableSet } from '@mbd/storage/idb';
 import { withinByteBudget } from '@mbd/storage/byte-budget';
 
@@ -58,6 +58,45 @@ export interface EnqueueEntry {
 
 export const MAX_ATTEMPTS = 3;
 export const QUEUE_KEY = 'downloadQueue';
+export const QUEUE_LOAD_MAX_ITEMS = 5_000;
+
+const object = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+const safeUrl = (value: unknown): value is string => typeof value === 'string' && value.length <= 16_384
+  && (/^https?:\/\//i.test(value) || /^data:image\//i.test(value) || /^blob:/i.test(value) || (!value.startsWith('//') && !/^[a-z][a-z0-9+.-]*:/i.test(value)));
+
+export function sanitizeQueueState(value: unknown): QueueState {
+  if (!object(value) || !Array.isArray(value.items)) return emptyQueue();
+  const items: QueueItem[] = [];
+  for (const raw of value.items.slice(0, QUEUE_LOAD_MAX_ITEMS)) {
+    if (!object(raw) || typeof raw.id !== 'string' || raw.id.length > 128 || !safeUrl(raw.url)) continue;
+    if (typeof raw.filename !== 'string' || raw.filename.length > 2_048) continue;
+    if (!['queued', 'active', 'done', 'failed'].includes(String(raw.status))) continue;
+    const attempts = typeof raw.attempts === 'number' && Number.isFinite(raw.attempts) ? Math.max(0, Math.floor(raw.attempts)) : 0;
+    const readyAt = typeof raw.readyAt === 'number' && Number.isFinite(raw.readyAt) ? raw.readyAt : 0;
+    const addedAt = typeof raw.addedAt === 'number' && Number.isFinite(raw.addedAt) ? raw.addedAt : 0;
+    items.push({
+      id: raw.id,
+      url: raw.url,
+      filename: raw.filename,
+      status: raw.status as QueueStatus,
+      attempts,
+      readyAt,
+      addedAt,
+      ...(typeof raw.error === 'string' ? { error: raw.error.slice(0, 1_024) } : {}),
+      ...(Number.isInteger(raw.downloadId) && (raw.downloadId as number) >= 0 ? { downloadId: raw.downloadId as number } : {}),
+      ...(typeof raw.claimedAt === 'number' && Number.isFinite(raw.claimedAt) ? { claimedAt: raw.claimedAt } : {}),
+      ...(object(raw.history) && safeUrl(raw.history.src) ? { history: raw.history as unknown as HistoryDraft } : {}),
+      ...(typeof raw.sidecar === 'string' && raw.sidecar.length <= 1_000_000 ? { sidecar: raw.sidecar } : {}),
+      ...(raw.useReferer === true ? { useReferer: true } : {}),
+      ...(raw.hotlink === true ? { hotlink: true } : {}),
+      ...(Number.isInteger(raw.ruleId) && (raw.ruleId as number) >= 0 ? { ruleId: raw.ruleId as number } : {}),
+      ...(typeof raw.bytesReceived === 'number' && Number.isFinite(raw.bytesReceived) ? { bytesReceived: Math.max(0, raw.bytesReceived) } : {}),
+      ...(typeof raw.totalBytes === 'number' && Number.isFinite(raw.totalBytes) ? { totalBytes: Math.max(0, raw.totalBytes) } : {}),
+    });
+  }
+  return { items, paused: value.paused === true };
+}
 
 export function backoffMs(attempts: number): number {
   return Math.min(1000 * 2 ** (attempts - 1), 30000);
@@ -239,13 +278,10 @@ export function clearFinished(state: QueueState): QueueState {
 export async function loadQueue(): Promise<QueueState> {
   const raw = await chrome.storage.local.get(QUEUE_KEY);
   const v = raw[QUEUE_KEY];
-  if (v && typeof v === 'object' && Array.isArray((v as QueueState).items)) {
-    return { items: (v as QueueState).items, paused: Boolean((v as QueueState).paused) };
-  }
-  return emptyQueue();
+  return sanitizeQueueState(v);
 }
 
 /** Resolves to whether the write persisted (see durableSet). */
-export async function saveQueue(state: QueueState): Promise<boolean> {
+export async function saveQueue(state: QueueState): Promise<PersistenceResult> {
   return durableSet(QUEUE_KEY, state);
 }

@@ -10,7 +10,7 @@ const port = Number(process.env.E2E_PORT) || 5199;
 createServer(async (req, res) => {
   try {
     const { pathname } = new URL(req.url, 'http://localhost');
-    const rel = pathname === '/' ? '/media.html' : pathname;
+    const rel = pathname === '/products/privacy-product' ? '/privacy.html' : pathname === '/' ? '/media.html' : pathname;
     const file = normalize(join(pagesDir, rel));
     if (!file.startsWith(pagesDir)) {
       res.writeHead(403).end('forbidden');

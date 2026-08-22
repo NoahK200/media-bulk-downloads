@@ -3,11 +3,12 @@ import { ExcludedKind } from '@mbd/core/types';
 import { SrcKeySet } from '@mbd/core/collection/canonical';
 import { ExcludedMatchers } from '@mbd/core/collection/filters';
 import { excludedMatchers, EXCLUDED_KEY } from '@mbd/storage/excluded';
+import { sendMutationMessage } from '@/extension/popup/utils';
 
 export interface UseExcludedResult {
   excludedMatch: ExcludedMatchers;
   excludedRef: RefObject<ExcludedMatchers>;
-  applyExcludedOptimistic: (updates: { kind: ExcludedKind; value: string; src: string }[]) => void;
+  applyExcluded: (updates: { kind: ExcludedKind; value: string; src: string }[]) => Promise<string | null>;
 }
 
 /**
@@ -30,7 +31,14 @@ export function useExcluded(): UseExcludedResult {
     return () => chrome.storage.onChanged.removeListener(onChanged);
   }, []);
 
-  const applyExcludedOptimistic = (updates: { kind: ExcludedKind; value: string; src: string }[]): void => {
+  const applyExcluded = async (updates: { kind: ExcludedKind; value: string; src: string }[]): Promise<string | null> => {
+    for (const update of updates) {
+      const response = await sendMutationMessage({
+        type: 'ADD_EXCLUDED',
+        entry: { value: update.value, kind: update.kind, time: Date.now() },
+      });
+      if (response.status === 'error') return response.message;
+    }
     let urls = excludedRef.current.urls;
     const hosts = new Set(excludedRef.current.hosts);
     for (const u of updates) {
@@ -40,7 +48,8 @@ export function useExcluded(): UseExcludedResult {
     const next = { urls, hosts };
     excludedRef.current = next;
     setExcludedMatch(next);
+    return null;
   };
 
-  return { excludedMatch, excludedRef, applyExcludedOptimistic };
+  return { excludedMatch, excludedRef, applyExcluded };
 }

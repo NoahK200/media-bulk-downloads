@@ -46,12 +46,12 @@ export async function downloadAndRecord(
   const entries = await Promise.all(
     toDownload.map(async (image, index): Promise<HistoryEntry | null> => {
       const filename = paths[index];
-      const downloadId = await platform.downloader.download(
+      const started = await platform.downloader.download(
         { url: image.src, filename, saveAs: currentSettings.saveAs, conflictAction: 'uniquify' },
       );
-      if (downloadId === undefined) return null;
-      if (currentSettings.metadataSidecar) {
-        scheduleSidecar(downloadId, filename, serializeSidecar(buildMediaSidecar(image, sourcePage, capturedAt)));
+      if (started.kind === 'failed') return null;
+      if (currentSettings.metadataSidecar && started.kind === 'tracked') {
+        scheduleSidecar(started.id, filename, serializeSidecar(buildMediaSidecar(image, sourcePage, capturedAt)));
       }
       return {
         src: image.src,
@@ -62,7 +62,7 @@ export async function downloadAndRecord(
         sourcePageUrl: image.sourcePage?.url ?? sourcePage?.url ?? '',
         sourcePageTitle: image.sourcePage?.title ?? sourcePage?.title,
         time: Date.now(),
-        downloadId,
+        ...(started.kind === 'tracked' ? { downloadId: started.id } : {}),
       };
     }),
   );

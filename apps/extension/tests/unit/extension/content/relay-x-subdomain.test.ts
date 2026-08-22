@@ -23,7 +23,7 @@ const loadContent = async (): Promise<{ handlers: Handler[]; sendMessage: Mock }
   sendMessage.mockReset();
   sendMessage.mockReturnValue(Promise.resolve(undefined));
 
-  await import('@/extension/content');
+  await import('@/extension/content/sniffer-relay');
 
   const handlers = addSpy.mock.calls.filter((c) => c[0] === 'message').map((c) => c[1] as Handler);
   addSpy.mockRestore();

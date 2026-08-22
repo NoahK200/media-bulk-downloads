@@ -1,17 +1,19 @@
-import { HistoryEntry } from '@mbd/core/types';
+import { HistoryEntry, PersistenceResult } from '@mbd/core/types';
 import { canonicalSrcKey } from '@mbd/core/collection/canonical';
 import { durableSet } from '@mbd/storage/idb';
 import { mergeHistory, HISTORY_CAP, HISTORY_MAX_BYTES } from '@mbd/core/collection/entry-merge';
 
 export const HISTORY_KEY = 'downloadHistory';
 export { mergeHistory, HISTORY_CAP, HISTORY_MAX_BYTES };
+const safeStoredSrc = (value: unknown): value is string => typeof value === 'string' && value.length <= 16_384
+  && (/^https?:\/\//i.test(value) || /^data:image\//i.test(value) || (!value.startsWith('//') && !/^[a-z][a-z0-9+.-]*:/i.test(value)));
 
 export async function loadHistory(): Promise<HistoryEntry[]> {
   const result = await chrome.storage.local.get(HISTORY_KEY);
   const raw = (result as Record<string, unknown>)[HISTORY_KEY];
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((e): e is HistoryEntry => !!e && typeof e === 'object' && typeof (e as HistoryEntry).src === 'string')
+    .filter((e): e is HistoryEntry => !!e && typeof e === 'object' && safeStoredSrc((e as HistoryEntry).src))
     .map((e) => ({ ...e, time: Number((e as HistoryEntry).time) || 0 }));
 }
 
@@ -23,31 +25,31 @@ function serialize<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /** Resolves to whether the write persisted (see durableSet); `true` on an empty no-op. */
-export async function recordDownloads(added: HistoryEntry[]): Promise<boolean> {
-  if (!added.length) return true;
+export async function recordDownloads(added: HistoryEntry[]): Promise<PersistenceResult> {
+  if (!added.length) return { ok: true };
   return serialize(async () => {
     const merged = mergeHistory(await loadHistory(), added);
     return durableSet(HISTORY_KEY, merged);
   });
 }
 
-export async function removeEntry(src: string): Promise<void> {
+export async function removeEntry(src: string): Promise<PersistenceResult> {
   return serialize(async () => {
     const next = (await loadHistory()).filter((e) => canonicalSrcKey(e.src) !== canonicalSrcKey(src));
-    await durableSet(HISTORY_KEY, next);
+    return durableSet(HISTORY_KEY, next);
   });
 }
 
-export async function clearHistory(): Promise<void> {
+export async function clearHistory(): Promise<PersistenceResult> {
   return serialize(async () => {
-    await durableSet(HISTORY_KEY, []);
+    return durableSet(HISTORY_KEY, []);
   });
 }
 
 /** Replace history with an imported list, normalized (dedup/sort/cap/byte-budget). */
-export async function restoreHistory(entries: HistoryEntry[]): Promise<void> {
+export async function restoreHistory(entries: HistoryEntry[]): Promise<PersistenceResult> {
   return serialize(async () => {
-    await durableSet(HISTORY_KEY, mergeHistory([], entries));
+    return durableSet(HISTORY_KEY, mergeHistory([], entries));
   });
 }
 

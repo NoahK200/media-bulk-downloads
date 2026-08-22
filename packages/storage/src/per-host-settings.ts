@@ -1,7 +1,7 @@
 import { SettingsData } from '@mbd/core/types';
 import { registrableDomain } from '@mbd/core/collection/paths';
 import { durableSet } from '@mbd/storage/idb';
-import { loadStoredSettings, withDefaults } from '@mbd/storage/settings';
+import { DEFAULT_SETTINGS, loadStoredSettings, withDefaults } from '@mbd/storage/settings';
 
 /**
  * Per-host preference overrides (#293). A Record<registrableDomain,
@@ -33,9 +33,10 @@ const asObject = (v: unknown): Record<string, unknown> =>
  *  legacy stored entry can never inject a non-allowlisted field. Pure. */
 export function pickHostFields(s: Partial<SettingsData>): Partial<SettingsData> {
   const src = asObject(s);
+  const sanitized = withDefaults({ ...DEFAULT_SETTINGS, ...src });
   const out: Record<string, unknown> = {};
   for (const k of HOST_OVERRIDE_FIELDS) {
-    if (k in src) out[k] = src[k];
+    if (k in src) out[k] = sanitized[k];
   }
   return out as Partial<SettingsData>;
 }

@@ -6,7 +6,38 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-21
+
 ### Added
+- **File-backed direct HLS capture.** Supported direct streams spool to OPFS up
+  to 2 GiB subject to quota; mux-heavy and fallback paths use a 256 MiB memory
+  safety ceiling with bounded four-request ordered prefetch, response limits,
+  deterministic cleanup, and restart-safe cleanup tokens.
+- **Hardened desktop sessions.** The loopback shell now lives only at an
+  unguessable session path, API/event credentials travel only in a request
+  header, state changes require the exact loopback origin, and Host, Fetch
+  Metadata, route payload, navigation, and request-size boundaries are enforced.
+
+### Fixed
+- **Desktop concurrent persistence is lossless.** History, favourites, imports,
+  clears, removals, and queue transitions use Deno KV compare-and-swap updates;
+  active queue entries are recoverable and a 100-completion stress test guards
+  against lost updates.
+- **Capture storage is bounded and recoverable.** Quota reserves, stale-file
+  purge, terminal-download cleanup, untracked Safari retention, and host-shutdown
+  cleanup prevent abandoned OPFS files and Blob URLs.
+
+### Changed
+- Persistent request relays remain separate from the on-demand collector, with
+  generated-bundle budgets and whole-source coverage thresholds enforced in CI.
+
+## [1.3.1] - 2026-08-21
+
+### Added
+- **Privacy access is now explicit and local-only.** Fresh installs register no
+  page scripts. Automatic badge scans, passive media-request observation, and
+  logged-in Sankaku resolution stay off until approved on that browser and are
+  never synced or included in backups.
 - **Stream capture (HLS & DASH) now works on Firefox and Safari.** Capture used to
   be Chrome-only because it assembled segments in a `chrome.offscreen` document.
   The engine now runs in each browser's own DOM-capable context (offscreen on
@@ -16,6 +47,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wherever a capture host is available.
 
 ### Fixed
+- **Safari queues no longer stall on synthetic download ids.** Anchor downloads
+  complete as explicitly untracked dispatches, so later queue entries continue
+  and unsupported file actions remain hidden.
+- **Corrupt settings and failed storage writes no longer masquerade as success.**
+  Every setting is runtime-validated, backups are bounded and versioned, and
+  queue/history/favourite/blocklist failures are surfaced to the user.
 - **No more broken-image boxes in the grid or preview.** When a thumbnail can't
   render in the popup (e.g. a signed Facebook/Instagram original that the CDN
   won't serve to the extension without the page's referer), the tile now shows a

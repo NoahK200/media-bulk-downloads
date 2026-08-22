@@ -92,6 +92,25 @@ describe('collectOpenTabs', () => {
     expect(items.map((i) => i.src)).toEqual(['https://a.com/x.jpg']);
   });
 
+  it('counts a requested tab that closed before collection as skipped', async () => {
+    mockTabs([tab(1, 'https://a.com')], { 1: { images: [] } });
+    const { scanned, skipped } = await collectOpenTabs({ tabIds: [1, 99] });
+    expect(scanned).toBe(1);
+    expect(skipped).toBe(1);
+  });
+
+  it('uses the supplied window and caps an all-tabs scan at fifty tabs', async () => {
+    const tabs = Array.from({ length: 55 }, (_, i) => tab(i + 1, `https://example.com/${i + 1}`));
+    mockTabs(tabs, Object.fromEntries(tabs.map((entry) => [entry.id!, { images: [] }])));
+    (chrome.tabs.sendMessage as Mock).mockClear();
+
+    const { scanned, skipped } = await collectOpenTabs({ windowId: 44 });
+    expect(chrome.tabs.query).toHaveBeenCalledWith({ windowId: 44 });
+    expect(scanned).toBe(50);
+    expect(skipped).toBe(5);
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(50);
+  });
+
   it('reports per-tab progress', async () => {
     mockTabs([tab(1, 'https://a.com'), tab(2, 'https://b.com')], {
       1: { images: [] },
@@ -132,5 +151,14 @@ describe('listOpenTabs', () => {
     expect(list.map((t) => t.id)).toEqual([1, 3]);
     expect(list[0].favIconUrl).toBe('https://a.com/fav.ico');
     expect(list[1].title).toBe('https://b.com');
+  });
+
+  it('uses the requested sender window and returns at most fifty tabs', async () => {
+    (chrome.tabs.query as Mock).mockResolvedValue(
+      Array.from({ length: 55 }, (_, i) => tab(i + 1, `https://example.com/${i + 1}`)),
+    );
+    const list = await listOpenTabs(17);
+    expect(chrome.tabs.query).toHaveBeenCalledWith({ windowId: 17 });
+    expect(list).toHaveLength(50);
   });
 });

@@ -13,6 +13,7 @@ import { installResponseSniffer, makeSnifferEmit } from '@mbd/core/resolvers/sni
  * fetch/XHR wiring is shared with the Instagram sniffer via installResponseSniffer.
  */
 export default defineContentScript({
+  registration: 'runtime',
   matches: ['*://x.com/*', '*://twitter.com/*'],
   runAt: 'document_start',
   world: 'MAIN',

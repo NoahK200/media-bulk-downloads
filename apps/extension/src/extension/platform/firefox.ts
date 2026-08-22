@@ -23,4 +23,5 @@ export const firefoxCaptureHost: StreamCaptureHost = {
   available: true,
   ensureReady: async () => {},
   run: (req: CaptureRunRequest) => import('./run-capture').then((m) => m.runCaptureInProcess(req)),
+  cleanup: (cleanupToken) => import('@/extension/capture/capture-sink').then((m) => m.cleanupCaptureArtifact(cleanupToken)),
 };

@@ -22,10 +22,8 @@ the code target a capability instead of a specific browser, so degraded targets
 Firefox / Safari implementations live in the app
 (`apps/extension/src/extension/platform/`). No runtime dependencies.
 
-> Status: the seam exists but is **not yet wired into the app** — the background
-> still calls `chrome.*` directly. Routing it through these contracts +
-> `selectPlatform()` is a tracked follow-up (see the
-> [monorepo-restructure](../../docs/architecture/monorepo-restructure.md) record).
+The seam is wired into background downloads, notifications, temporary header
+rules, and stream-capture hosting. Tab/runtime messaging remains app-owned glue.
 
 ## Tests
 

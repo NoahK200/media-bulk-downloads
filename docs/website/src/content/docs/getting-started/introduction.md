@@ -35,15 +35,15 @@ without sending your browsing anywhere. It's a cross-browser Manifest-V3 extensi
 ```mermaid
 flowchart LR
   subgraph Page["Web page"]
-    CS["Content script<br/>content.ts + collect/extract"]
-    BUB["In-page bubble<br/>(React in Shadow DOM)"]
+    CS["On-demand collector<br/>runtime-injected after action/consent"]
+    BUB["Optional in-page bubble<br/>(separate runtime registration)"]
   end
   SW["Service worker<br/>background.ts"]
   POP["Popup<br/>(React)"]
 
   POP -- "GET_IMAGES / DEEP_SCAN / DOWNLOAD_IMAGES" --> CS
   POP -- "DOWNLOAD_IMAGES" --> SW
-  SW -- "GET_IMAGES (badge)" --> CS
+  SW -- "GET_IMAGES allowNetwork:false (consented badge)" --> CS
   SW -- "TOGGLE_BUBBLE (icon click)" --> BUB
   CS --- BUB
   SW -- "chrome.downloads" --> DISK[("Downloads")]
@@ -56,18 +56,22 @@ flowchart LR
 
 ## Design constraints (read before changing collection)
 
-- **Passive collection is network-free.** The content script and badge derive
+- **Collection is inspection-free until an action or local consent.** A fresh
+  install registers no page script. User-initiated and consented badge scans derive
   metadata from the DOM and URL strings only — no `fetch`, `HEAD`, or preload
   while scanning.
-- **Two things touch the network, neither during passive collection.**
-  Image-size `HEAD` requests run only from the popup, against images the page
-  already loaded, and stay on each image's own host (never the background badge
-  path). **Resolve Originals** (`resolveOriginals`, off by default) is the only
+- **Explicit features touch the network, never the automatic badge path.**
+  Image-size `HEAD` requests run only from a user-opened popup with **Resolve
+  Originals** enabled, against images the page already loaded. **Resolve Originals**
+  (`resolveOriginals`, off by default) can also
   feature that contacts a host other than the page you're on: when on, the
   background resolves the exact original from one of ~20 supported hosts (Twitter/X,
   Wallhaven, Unsplash, Vimeo, Dailymotion, Bluesky, Pinterest, Reddit, Flickr,
   ArtStation, SoundCloud, Twitch, Loom, PeerTube, and more).
   See [Resolve Originals](/media-bulk-downloads/how-it-works/resolve-originals/) for the full list.
+- **Passive request observation is a separate local consent.** The all-site HLS
+  observer records manifest URLs only; supported-site sniffers inspect selected
+  media API response bodies locally. Raw bodies are never persisted.
 - **Deep scan issues no requests of its own.** It scrolls and re-reads the DOM;
   the page loads its own media.
 - **URL upgrades are conservative.** Only safe, path-based CDN rewrites. Signed

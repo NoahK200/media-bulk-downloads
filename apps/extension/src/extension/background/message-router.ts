@@ -5,6 +5,12 @@ import {
   CaptureStreamResponse,
   SettingsData,
   ListVariantsResult,
+  MutationResponse,
+  PrivacyPreferences,
+  PersistenceResult,
+  CollectOpenTabsProgressMessage,
+  CollectOpenTabsResponse,
+  ListOpenTabsResponse,
 } from '@mbd/core/types';
 import { filterImagesBySettings, filterExcluded } from '@mbd/core/collection/filters';
 import { buildDownloadFilename } from '@mbd/core/collection/download-name';
@@ -22,20 +28,41 @@ import { isMasterPlaylist } from '@mbd/core/download/stream/hls';
 import { variantsFromMaster, variantsFromMpd } from '@mbd/core/download/stream/variants';
 import { assertSafeCaptureUrl } from '@mbd/core/download/stream/ssrf-guard';
 import { readBoundedText } from '@mbd/core/download/stream/bounded-fetch';
+import { MANIFEST_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 import {
-  enqueueDownloads, pauseQueue, resumeQueue, cancelQueue, retryQueueItem, getQueueSnapshot,
+  enqueueDownloads, pauseQueue, resumeQueue, cancelQueue, retryQueueItem,
   clearFinishedQueue, retryAllFailedQueue, openQueueItem,
 } from '@/extension/background/download/download-queue';
 import { scheduleSidecar } from '@/extension/background/download/sidecar-writer';
 import { platform } from '@/extension/platform';
 import type { HistoryDraft, EnqueueEntry, QueueState } from '@mbd/storage/download-queue';
-import { currentSettings, excludedCache, settingsReady, excludedReady, writeSettingsPatch } from '@/extension/background/state';
-import { storeSniffedMedia, snifferByTab, resolveOriginalsBatch } from '@/extension/background/sniffer-store';
+import {
+  currentPrivacy,
+  currentSettings,
+  excludedCache,
+  settingsReady,
+  privacyReady,
+  excludedReady,
+  setCurrentPrivacy,
+  writeSettingsPatch,
+} from '@/extension/background/state';
+import {
+  clearPassiveSnifferEntries,
+  getPassiveSnifferSnapshot,
+  storePassiveSnifferEntries,
+  storeSniffedMedia,
+  snifferByTab,
+  resolveOriginalsBatch,
+  type PassiveSnifferSnapshot,
+} from '@/extension/background/sniffer-store';
 import { captureStreamToFile, captureRunTabs } from '@/extension/background/download/capture';
+import { patchPrivacyPreferences } from '@mbd/storage/privacy';
+import { injectObservationIntoOpenTabs, stopObservationInOpenTabs } from '@/extension/background/content-scripts';
+import { collectOpenTabs, listOpenTabs } from '@/extension/shared/active-tab/collect-open-tabs';
 
 /** Response callback shape for the background message router. */
 export type SendResponse = (
-  response: DownloadResponse | ResolveOriginalsResponse | string[] | CaptureStreamResponse | QueueState | SettingsData | ListVariantsResult,
+  response: DownloadResponse | MutationResponse | ResolveOriginalsResponse | string[] | CaptureStreamResponse | QueueState | SettingsData | PrivacyPreferences | ListVariantsResult | PassiveSnifferSnapshot | ListOpenTabsResponse | CollectOpenTabsResponse,
 ) => void;
 
 /** Push the current settings to every tab's content script so the on-page bubble
@@ -75,6 +102,18 @@ function queuedSkipMessage(queued: number, skipped: number): string {
   return `Queued ${queued} download${s}${tail}.`;
 }
 
+function mutationResult(result: PersistenceResult, successMessage?: string): MutationResponse {
+  return result.ok
+    ? { status: 'success', ...(successMessage ? { message: successMessage } : {}) }
+    : {
+        status: 'error',
+        code: `storage-${result.code}`,
+        message: result.code === 'quota'
+          ? 'This change was not saved because extension storage is full.'
+          : 'This change could not be saved. Please try again.',
+      };
+}
+
 type MessageRouter = {
   [K in ObjectMessage['type']]?: (
     message: Extract<ObjectMessage, { type: K }>,
@@ -86,6 +125,16 @@ type MessageRouter = {
 export const messageRouter: MessageRouter = {
   X_MEDIA_SEEN: (message, sender) => {
     if (sender.tab?.id != null) storeSniffedMedia(sender.tab.id, message.pairs);
+  },
+
+  PASSIVE_SNIFFER_SEEN: (message, sender) => {
+    if (sender.tab?.id != null) storePassiveSnifferEntries(sender.tab.id, message.kind, message.entries);
+  },
+
+  GET_PASSIVE_SNIFFER_SNAPSHOT: (_message, sender, respond) => {
+    respond(sender.tab?.id == null
+      ? { ig: [], fb: [], pinterest: [], mangadex: [], hls: [] }
+      : getPassiveSnifferSnapshot(sender.tab.id));
   },
 
   DOWNLOAD_IMAGES: (message, _sender, respond) => {
@@ -149,10 +198,6 @@ export const messageRouter: MessageRouter = {
     void p.then(() => respond({ status: 'success', message: 'Retrying' }));
     return true;
   },
-  QUEUE_GET: (_message, _sender, respond) => {
-    void getQueueSnapshot().then((snap) => respond(snap));
-    return true;
-  },
   QUEUE_CLEAR: (_message, _sender, respond) => {
     void clearFinishedQueue().then(() => respond({ status: 'success', message: 'Cleared' }));
     return true;
@@ -166,10 +211,10 @@ export const messageRouter: MessageRouter = {
     const { b64, filename } = message;
     void settingsReady.then(async () => {
       const url = `data:application/zip;base64,${b64}`;
-      const downloadId = await platform.downloader.download(
+      const started = await platform.downloader.download(
         { url, filename, saveAs: currentSettings.saveAs, conflictAction: 'uniquify' },
       );
-      if (downloadId === undefined) {
+      if (started.kind === 'failed') {
         respond({ status: 'error', message: `Couldn't save ${filename}.` });
       } else {
         respond({ status: 'success', message: `Saved ${filename}.` });
@@ -197,11 +242,11 @@ export const messageRouter: MessageRouter = {
             new Date().toISOString(),
           ))
         : undefined;
-      const downloadId = await platform.downloader.download(
+      const started = await platform.downloader.download(
         { url, filename, saveAs: currentSettings.saveAs, conflictAction: 'uniquify' },
       );
-      if (downloadId === undefined) return;
-      if (sidecarJson) scheduleSidecar(downloadId, filename, sidecarJson);
+      if (started.kind === 'failed') return;
+      if (sidecarJson && started.kind === 'tracked') scheduleSidecar(started.id, filename, sidecarJson);
       if (!source) return;
       void recordDownloads([{
         src: source.src,
@@ -212,17 +257,91 @@ export const messageRouter: MessageRouter = {
         sourcePageUrl: source.sourcePageUrl,
         sourcePageTitle: source.sourcePageTitle,
         time: Date.now(),
-        downloadId,
+        ...(started.kind === 'tracked' ? { downloadId: started.id } : {}),
       }]);
     });
   },
 
-  SET_SETTINGS: (message) => {
-    void writeSettingsPatch(message.patch).then((settings) => broadcastSettings(settings));
+  SET_SETTINGS: (message, _sender, respond) => {
+    void writeSettingsPatch(message.patch).then(({ settings, result }) => {
+      if (result.ok) broadcastSettings(settings);
+      respond(mutationResult(result, 'Settings saved.'));
+    });
+    return true;
   },
 
   GET_SETTINGS: (_message, _sender, respond) => {
     void settingsReady.then(() => respond(currentSettings));
+    return true;
+  },
+
+  GET_PRIVACY_PREFERENCES: (_message, _sender, respond) => {
+    void privacyReady.then(() => respond(currentPrivacy));
+    return true;
+  },
+
+  SET_PRIVACY_PREFERENCES: (message, _sender, respond) => {
+    void patchPrivacyPreferences(message.patch).then(({ result, preferences }) => {
+      if (result.ok) {
+        const enableObservation = !currentPrivacy.observeMediaRequests && preferences.observeMediaRequests;
+        const disableObservation = currentPrivacy.observeMediaRequests && !preferences.observeMediaRequests;
+        setCurrentPrivacy(preferences);
+        if (enableObservation) void injectObservationIntoOpenTabs();
+        if (disableObservation) {
+          snifferByTab.clear();
+          clearPassiveSnifferEntries();
+          stopObservationInOpenTabs();
+        }
+      }
+      respond(mutationResult(result, 'Privacy preferences saved.'));
+    });
+    return true;
+  },
+
+  LIST_OPEN_TABS: (_message, sender, respond) => {
+    const windowId = sender.tab?.windowId;
+    if (typeof windowId !== 'number' || !Number.isInteger(windowId) || windowId < 0) {
+      respond({ ok: false, code: 'no-origin-tab', message: 'The browser window for this panel is unavailable.' });
+      return;
+    }
+    void listOpenTabs(windowId).then(
+      (tabs) => respond({ ok: true, tabs }),
+      () => respond({ ok: false, code: 'unavailable', message: 'Open tabs could not be listed.' }),
+    );
+    return true;
+  },
+
+  COLLECT_OPEN_TABS: (message, sender, respond) => {
+    const tabId = sender.tab?.id;
+    const windowId = sender.tab?.windowId;
+    if (
+      typeof tabId !== 'number'
+      || !Number.isInteger(tabId)
+      || typeof windowId !== 'number'
+      || !Number.isInteger(windowId)
+      || windowId < 0
+    ) {
+      respond({ ok: false, code: 'no-origin-tab', message: 'The browser window for this panel is unavailable.' });
+      return;
+    }
+    void collectOpenTabs({
+      windowId,
+      ...(message.tabIds ? { tabIds: message.tabIds } : {}),
+      onProgress: (done, total) => {
+        const progress: CollectOpenTabsProgressMessage = {
+          type: 'COLLECT_OPEN_TABS_PROGRESS',
+          requestId: message.requestId,
+          done,
+          total,
+        };
+        void Promise.resolve(chrome.tabs.sendMessage(tabId, progress)).catch(() => {
+          /* requester closed or navigated; collection remains safe to finish */
+        });
+      },
+    }).then(
+      (result) => respond({ ok: true, ...result }),
+      () => respond({ ok: false, code: 'unknown', message: 'Multi-tab collection failed.' }),
+    );
     return true;
   },
 
@@ -237,10 +356,18 @@ export const messageRouter: MessageRouter = {
     void saveScanMemoryForHost(message.host, message.sample);
   },
 
-  RESTORE_DATA: (message) => {
-    void restoreFavourites(message.favourites);
-    void restoreHistory(message.history);
-    void restoreExcluded(message.excluded);
+  RESTORE_DATA: (message, _sender, respond) => {
+    void Promise.all([
+      restoreFavourites(message.favourites),
+      restoreHistory(message.history),
+      restoreExcluded(message.excluded),
+    ]).then((results) => {
+      const failed = results.filter((result) => !result.ok);
+      respond(failed.length
+        ? { status: 'error', code: 'restore-partial', message: `Restore was incomplete: ${failed.length} data store${failed.length === 1 ? '' : 's'} could not be saved.` }
+        : { status: 'success', message: 'Backup data restored.' });
+    });
+    return true;
   },
 
   OPEN_DOWNLOAD_FILE: (message) => {
@@ -271,14 +398,14 @@ export const messageRouter: MessageRouter = {
     if (/^https?:\/\//i.test(message.url)) void chrome.tabs.create({ url: message.url });
   },
 
-  CLEAR_HISTORY: () => { void clearHistory(); },
-  REMOVE_HISTORY_ENTRY: (message) => { void removeEntry(message.src); },
-  ADD_FAVOURITE: (message) => { void addFavourite(message.entry); },
-  REMOVE_FAVOURITE: (message) => { void removeFavourite(message.src); },
-  CLEAR_FAVOURITES: () => { void clearFavourites(); },
-  ADD_EXCLUDED: (message) => { void addExcluded(message.entry); },
-  REMOVE_EXCLUDED: (message) => { void removeExcluded(message.kind, message.value); },
-  CLEAR_EXCLUDED: () => { void clearExcluded(); },
+  CLEAR_HISTORY: (_message, _sender, respond) => { void clearHistory().then((r) => respond(mutationResult(r))); return true; },
+  REMOVE_HISTORY_ENTRY: (message, _sender, respond) => { void removeEntry(message.src).then((r) => respond(mutationResult(r))); return true; },
+  ADD_FAVOURITE: (message, _sender, respond) => { void addFavourite(message.entry).then((r) => respond(mutationResult(r))); return true; },
+  REMOVE_FAVOURITE: (message, _sender, respond) => { void removeFavourite(message.src).then((r) => respond(mutationResult(r))); return true; },
+  CLEAR_FAVOURITES: (_message, _sender, respond) => { void clearFavourites().then((r) => respond(mutationResult(r))); return true; },
+  ADD_EXCLUDED: (message, _sender, respond) => { void addExcluded(message.entry).then((r) => respond(mutationResult(r))); return true; },
+  REMOVE_EXCLUDED: (message, _sender, respond) => { void removeExcluded(message.kind, message.value).then((r) => respond(mutationResult(r))); return true; },
+  CLEAR_EXCLUDED: (_message, _sender, respond) => { void clearExcluded().then((r) => respond(mutationResult(r))); return true; },
 
   RESOLVE_ORIGINALS: (message, sender, respond) => {
     const seen = new Set<string>();
@@ -289,8 +416,9 @@ export const messageRouter: MessageRouter = {
     });
     const run = (tabId?: number) => {
       const sniffed = tabId != null ? snifferByTab.get(tabId) : undefined;
-      void settingsReady.then(() => {
-        const authed = message.authed === true && currentSettings.sankakuAuthedOriginals === true;
+      void Promise.all([settingsReady, privacyReady]).then(() => {
+        const authed = message.credentialScopes?.includes('sankaku-session') === true
+          && currentPrivacy.sankakuSessionResolution;
         resolveOriginalsBatch(hints, undefined, sniffed, authed).then((resolved) => respond({ resolved }));
       });
     };
@@ -329,7 +457,7 @@ export const messageRouter: MessageRouter = {
     void (async () => {
       try {
         assertSafeCaptureUrl(manifestUrl);
-        const text = await readBoundedText(await fetch(manifestUrl, { redirect: 'error' }));
+        const text = await readBoundedText(await fetch(manifestUrl, { redirect: 'error' }), MANIFEST_MAX_BYTES);
         const variants = engine === 'dash'
           ? variantsFromMpd(text, manifestUrl)
           : isMasterPlaylist(text) ? variantsFromMaster(text, manifestUrl) : [];

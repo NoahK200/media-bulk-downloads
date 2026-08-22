@@ -30,7 +30,7 @@ the listing copy is intentionally identical so every store matches.
 
 - [ ] **Opera account** created and the developer agreement accepted at [addons.opera.com/developer](https://addons.opera.com/developer/).
 - [ ] `wxt.config.ts` name/description correct; version comes from `apps/extension/package.json`. `yarn zip` emits the Chromium package `apps/extension/.output/media-bulk-downloads-<version>-chrome.zip`.
-- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `tabs`, `contextMenus`, `offscreen`, host `<all_urls>`; optional `notifications` and
+- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `scripting`, `tabs`, `contextMenus`, `offscreen`, host `<all_urls>`; optional `notifications` and
   `declarativeNetRequestWithHostAccess` (both requested at runtime).
 - [ ] Icons 16/32/48/64/128 present (`apps/extension/src/public/icon/`) — ✅ already in the build; Opera uses the manifest icons.
 - [ ] Privacy policy hosted at a public URL (see §6): `https://github.com/mralaminahamed/media-bulk-downloads/blob/main/PRIVACY.md`.
@@ -114,7 +114,7 @@ FASTER TO REACH
 • Back up and restore your settings, favourites, and history as a JSON file
 
 PRIVATE BY DESIGN
-• Network-free by default: it only reads what the page already loaded
+• Network- and observation-free by default: it only reads what the page already loaded
 • No accounts, no analytics, no servers — everything runs locally in your browser
 • Your settings and history never leave your device
 

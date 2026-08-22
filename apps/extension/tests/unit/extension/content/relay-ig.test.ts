@@ -21,12 +21,13 @@ export {};
 
 type Handler = (event: unknown) => void;
 
-const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffedIgMedia: Mock }> => {
+const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffedIgMedia: Mock; hydrate: () => void }> => {
   vi.resetModules();
   const addSpy = vi.spyOn(window, 'addEventListener');
   vi.spyOn(window, 'postMessage').mockImplementation(() => {});
+  (chrome.runtime.sendMessage as Mock).mockReturnValue(Promise.resolve(undefined));
 
-  await import('@/extension/content');
+  await import('@/extension/content/sniffer-relay');
 
   const messageHandlers = addSpy.mock.calls
     .filter((c) => c[0] === 'message')
@@ -35,8 +36,10 @@ const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffe
 
   const igMod = await import('@mbd/core/resolvers/sites/instagram');
   const ingestSniffedIgMedia = igMod.ingestSniffedIgMedia as unknown as Mock;
+  const { clearSnifferBuffers, hydrateSnifferBuffers } = await import('@/extension/content/sniffer-hydrate');
+  clearSnifferBuffers();
   ingestSniffedIgMedia.mockClear();
-  return { messageHandlers, ingestSniffedIgMedia };
+  return { messageHandlers, ingestSniffedIgMedia, hydrate: hydrateSnifferBuffers };
 };
 
 const fire = (handlers: Handler[], event: unknown): void => handlers.forEach((h) => h(event));
@@ -57,23 +60,25 @@ describe('Instagram media relay (instagram.com)', () => {
   });
 
   it('feeds a valid mbd-ig-media envelope to ingestSniffedIgMedia', async () => {
-    const { messageHandlers, ingestSniffedIgMedia } = await loadContent();
+    const { messageHandlers, ingestSniffedIgMedia, hydrate } = await loadContent();
     const entries = [{ code: 'ABC', kind: 'image', url: 'https://scontent.cdninstagram.com/a.jpg' }];
     fire(messageHandlers, message({ source: 'mbd-ig-media', entries }));
+    hydrate();
     expect(ingestSniffedIgMedia).toHaveBeenCalledWith(entries);
   });
 
   it('wires both the IG and HLS relays on instagram.com', async () => {
-    expect((await loadContent()).messageHandlers).toHaveLength(2);
+    expect((await loadContent()).messageHandlers).toHaveLength(3);
   });
 
   it('ignores a foreign window source, a foreign origin, a wrong tag, and a non-array entries', async () => {
-    const { messageHandlers, ingestSniffedIgMedia } = await loadContent();
+    const { messageHandlers, ingestSniffedIgMedia, hydrate } = await loadContent();
     fire(messageHandlers, message({ source: 'mbd-ig-media', entries: [] }, { source: {} }));
     fire(messageHandlers, message({ source: 'mbd-ig-media', entries: [] }, { origin: 'https://evil.example' }));
     fire(messageHandlers, message({ source: 'mbd-not-ig', entries: [] }));
     fire(messageHandlers, message({ source: 'mbd-ig-media', entries: 'nope' }));
     fire(messageHandlers, message(null));
-    expect(ingestSniffedIgMedia).not.toHaveBeenCalled();
+    hydrate();
+    expect(ingestSniffedIgMedia).toHaveBeenCalledWith([]);
   });
 });

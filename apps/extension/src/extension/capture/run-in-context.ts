@@ -5,6 +5,8 @@ import { browserDashDeps } from '@mbd/core/download/stream/dash-fetch';
 import { encodeMp3, mp3BitrateFor, canTranscodeToMp3 } from '@mbd/core/download/stream/mp3';
 import type { AudioFormat, CaptureRunResult } from '@mbd/core/types';
 import type { CaptureRunRequest } from '@mbd/platform';
+import { createCaptureSink, createMemoryArtifact } from '@/extension/capture/capture-sink';
+import { MEMORY_CAPTURE_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 
 /**
  * The browser-agnostic capture host body: assemble an HLS/DASH stream (optionally
@@ -15,15 +17,6 @@ import type { CaptureRunRequest } from '@mbd/platform';
  * (OfflineAudioContext, for the MP3 decode) + a CORS-free fetch — all present in
  * every host that calls it. Broadcasts CAPTURE_PROGRESS for the popup/bubble.
  */
-
-/** Publish assembled bytes as a same-extension blob URL, kept alive long enough
- *  for the background's downloader to read it. */
-function publish(bytes: Uint8Array, mime: string): string {
-  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const blobUrl = URL.createObjectURL(new Blob([ab], { type: mime }));
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-  return blobUrl;
-}
 
 /**
  * Decode the extracted M4A (AAC) and re-encode it to a CBR MP3 (#321). An
@@ -50,23 +43,54 @@ export async function runCaptureInContext(req: CaptureRunRequest): Promise<Captu
     void chrome.runtime.sendMessage({ type: 'CAPTURE_PROGRESS', runId, done, total });
   };
   let res;
+  let sink: Awaited<ReturnType<typeof createCaptureSink>> | undefined;
   try {
+    if (engine === 'hls' && (!audioOnly || audioFormat === 'm4a')) {
+      sink = await createCaptureSink(runId, maxBytes);
+    }
     res = engine === 'dash'
-      ? await captureDash(manifestUrl, browserDashDeps(onProgress), { quality, maxBytes, audioOnly })
-      : await captureHls(manifestUrl, browserHlsDeps(onProgress), { quality, maxBytes, audioOnly });
+      ? await captureDash(manifestUrl, browserDashDeps(onProgress), {
+          quality,
+          maxBytes: Math.min(maxBytes, MEMORY_CAPTURE_MAX_BYTES),
+          audioOnly,
+        })
+      : await captureHls(manifestUrl, browserHlsDeps(onProgress), {
+          quality,
+          maxBytes: sink?.limit ?? Math.min(maxBytes, MEMORY_CAPTURE_MAX_BYTES),
+          audioOnly,
+          sink,
+        });
   } catch (e) {
+    await sink?.abort();
     const code = e instanceof HlsError || e instanceof DashError ? e.code : 'unknown';
+    if (e instanceof Error && e.message === 'insufficient-storage') return { ok: false, code: 'insufficient-storage' };
     return { ok: false, code };
   }
+
+  if ('artifact' in res && res.artifact) {
+    return {
+      ok: true,
+      blobUrl: res.artifact.url,
+      size: res.artifact.size,
+      backing: res.artifact.backing,
+      cleanupToken: res.artifact.cleanupToken,
+      ext: res.ext,
+      segmentCount: res.segmentCount,
+      muxedAudio: !!res.muxedAudio,
+    };
+  }
+  await sink?.abort();
 
   const kbps = audioOnly ? mp3BitrateFor(audioFormat) : null;
   try {
     if (kbps !== null) {
       const mp3 = await transcodeToMp3(res.bytes, kbps);
-      return { ok: true, blobUrl: publish(mp3, 'audio/mpeg'), ext: 'mp3', segmentCount: res.segmentCount, muxedAudio: !!res.muxedAudio };
+      const artifact = await createMemoryArtifact(mp3, 'audio/mpeg');
+      return { ok: true, blobUrl: artifact.url, size: artifact.size, backing: artifact.backing, cleanupToken: artifact.cleanupToken, ext: 'mp3', segmentCount: res.segmentCount, muxedAudio: !!res.muxedAudio };
     }
-    return { ok: true, blobUrl: publish(res.bytes, res.mime), ext: res.ext, segmentCount: res.segmentCount, muxedAudio: !!res.muxedAudio };
+    const artifact = await createMemoryArtifact(res.bytes, res.mime);
+    return { ok: true, blobUrl: artifact.url, size: artifact.size, backing: artifact.backing, cleanupToken: artifact.cleanupToken, ext: res.ext, segmentCount: res.segmentCount, muxedAudio: !!res.muxedAudio };
   } catch {
-    return { ok: false, code: kbps !== null ? 'mp3_transcode_failed' : 'unknown' };
+    return { ok: false, code: kbps !== null ? 'mp3_transcode_failed' : 'memory-limit' };
   }
 }

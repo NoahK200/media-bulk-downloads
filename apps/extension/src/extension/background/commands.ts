@@ -6,6 +6,7 @@ import { currentSettings, excludedCache, settingsReady, excludedReady } from '@/
 import { downloadAndRecord } from '@/extension/background/download/downloads';
 import { captureStreamToFile, captureRunTabs } from '@/extension/background/download/capture';
 import { MENU, mediaFromContext } from '@/extension/background/context-menu';
+import { ensureContentScript } from '@/extension/shared/active-tab/runtime-content';
 
 const CAPTURE_CONCURRENCY = 2;
 
@@ -19,7 +20,7 @@ export function downloadAllForTab(tab?: chrome.tabs.Tab): void {
   if (tab?.id == null) return;
   const tabId = tab.id;
   const sourcePage = tab.url ? { url: tab.url, title: tab.title } : undefined;
-  chrome.tabs.sendMessage(tabId, 'GET_IMAGES', (images: ImageInfo[]) => {
+  void ensureContentScript(tabId).then(() => chrome.tabs.sendMessage(tabId, { type: 'GET_IMAGES', allowNetwork: true }, (images: ImageInfo[]) => {
     if (chrome.runtime.lastError || !Array.isArray(images)) return;
     void Promise.all([settingsReady, excludedReady]).then(() => {
       const eligible = filterExcluded(filterImagesBySettings(images, currentSettings), excludedCache);
@@ -39,7 +40,7 @@ export function downloadAllForTab(tab?: chrome.tabs.Tab): void {
       };
       void Promise.all(Array.from({ length: Math.min(CAPTURE_CONCURRENCY, streams.length) }, worker));
     });
-  });
+  })).catch(() => {});
 }
 
 /** Keyboard-command dispatch. `_execute_action` (open popup) is handled by the

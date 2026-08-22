@@ -21,12 +21,13 @@ export {};
 
 type Handler = (event: unknown) => void;
 
-const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffedFbMedia: Mock }> => {
+const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffedFbMedia: Mock; hydrate: () => void }> => {
   vi.resetModules();
   const addSpy = vi.spyOn(window, 'addEventListener');
   vi.spyOn(window, 'postMessage').mockImplementation(() => {});
+  (chrome.runtime.sendMessage as Mock).mockReturnValue(Promise.resolve(undefined));
 
-  await import('@/extension/content');
+  await import('@/extension/content/sniffer-relay');
 
   const messageHandlers = addSpy.mock.calls
     .filter((c) => c[0] === 'message')
@@ -35,8 +36,10 @@ const loadContent = async (): Promise<{ messageHandlers: Handler[]; ingestSniffe
 
   const fbMod = await import('@mbd/core/resolvers/sites/facebook');
   const ingestSniffedFbMedia = fbMod.ingestSniffedFbMedia as unknown as Mock;
+  const { clearSnifferBuffers, hydrateSnifferBuffers } = await import('@/extension/content/sniffer-hydrate');
+  clearSnifferBuffers();
   ingestSniffedFbMedia.mockClear();
-  return { messageHandlers, ingestSniffedFbMedia };
+  return { messageHandlers, ingestSniffedFbMedia, hydrate: hydrateSnifferBuffers };
 };
 
 const fire = (handlers: Handler[], event: unknown): void => handlers.forEach((h) => h(event));
@@ -57,30 +60,32 @@ describe('Facebook media relay (facebook.com)', () => {
   });
 
   it('feeds a valid mbd-fb-media envelope to ingestSniffedFbMedia', async () => {
-    const { messageHandlers, ingestSniffedFbMedia } = await loadContent();
+    const { messageHandlers, ingestSniffedFbMedia, hydrate } = await loadContent();
     const entries = [{ fbid: '100', kind: 'image', url: 'https://x.fbcdn.net/a.jpg' }];
     fire(messageHandlers, message({ source: 'mbd-fb-media', entries }));
+    hydrate();
     expect(ingestSniffedFbMedia).toHaveBeenCalledWith(entries);
   });
 
   it('wires both the FB and HLS relays on facebook.com', async () => {
-    expect((await loadContent()).messageHandlers).toHaveLength(2);
+    expect((await loadContent()).messageHandlers).toHaveLength(3);
   });
 
   it('ignores a foreign window source, a foreign origin, a wrong tag, and a non-array entries', async () => {
-    const { messageHandlers, ingestSniffedFbMedia } = await loadContent();
+    const { messageHandlers, ingestSniffedFbMedia, hydrate } = await loadContent();
     fire(messageHandlers, message({ source: 'mbd-fb-media', entries: [] }, { source: {} }));
     fire(messageHandlers, message({ source: 'mbd-fb-media', entries: [] }, { origin: 'https://evil.example' }));
     fire(messageHandlers, message({ source: 'mbd-not-fb', entries: [] }));
     fire(messageHandlers, message({ source: 'mbd-fb-media', entries: 'nope' }));
     fire(messageHandlers, message(null));
-    expect(ingestSniffedFbMedia).not.toHaveBeenCalled();
+    hydrate();
+    expect(ingestSniffedFbMedia).toHaveBeenCalledWith([]);
   });
 
   it('announces mbd-fb-ready so the MAIN sniffer can replay early graphql', async () => {
     vi.resetModules();
     const postSpy = vi.spyOn(window, 'postMessage').mockImplementation(() => undefined as never);
-    await import('@/extension/content');
+    await import('@/extension/content/sniffer-relay');
     expect(postSpy).toHaveBeenCalledWith({ source: 'mbd-fb-ready' }, window.location.origin);
   });
 });

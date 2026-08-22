@@ -22,7 +22,7 @@ describe('durableSet', () => {
   });
 
   it('resolves true when the local write persists', async () => {
-    await expect(durableSet('favourites', [1])).resolves.toBe(true);
+    await expect(durableSet('favourites', [1])).resolves.toEqual({ ok: true });
   });
 
   it('resolves false (never rejects) when the local write is rejected — e.g. QUOTA_BYTES', async () => {
@@ -30,7 +30,7 @@ describe('durableSet', () => {
     (chrome.storage.local.set as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error('QUOTA_BYTES quota exceeded'),
     );
-    await expect(durableSet('favourites', [1])).resolves.toBe(false);
+    await expect(durableSet('favourites', [1])).resolves.toEqual({ ok: false, code: 'quota' });
     expect(err).toHaveBeenCalled();
     err.mockRestore();
   });

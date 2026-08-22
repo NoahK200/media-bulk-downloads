@@ -1,5 +1,6 @@
-import type { CaptureRunMessage } from '@mbd/core/types';
+import type { CaptureCleanupMessage, CaptureRunMessage } from '@mbd/core/types';
 import { runCaptureInContext } from '@/extension/capture/run-in-context';
+import { cleanupCaptureArtifact } from '@/extension/capture/capture-sink';
 
 /**
  * The offscreen document's capture host. The offscreen realm has DOM APIs
@@ -12,7 +13,13 @@ import { runCaptureInContext } from '@/extension/capture/run-in-context';
  */
 export function installOffscreenCaptureHost(): void {
   chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-    if (!message || (message as { type?: unknown }).type !== 'CAPTURE_RUN') return;
+    if (!message) return;
+    if ((message as { type?: unknown }).type === 'CAPTURE_CLEANUP') {
+      const { cleanupToken } = message as CaptureCleanupMessage;
+      void cleanupCaptureArtifact(cleanupToken).then(() => sendResponse(true));
+      return true;
+    }
+    if ((message as { type?: unknown }).type !== 'CAPTURE_RUN') return;
     const { runId, manifestUrl, engine, quality, maxBytes, audioOnly, audioFormat } = message as CaptureRunMessage;
     void runCaptureInContext({ runId, manifestUrl, engine, quality, maxBytes, audioOnly: !!audioOnly, audioFormat }).then(sendResponse);
     return true;

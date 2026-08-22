@@ -1,4 +1,5 @@
 import { isSafeCaptureUrl } from '@mbd/core/download/stream/ssrf-guard';
+import type { MutationResponse } from '@mbd/core/types';
 
 /**
  * Fetches the byte size of a remote image via a HEAD request.
@@ -55,6 +56,23 @@ export function sendRuntimeMessage(message: unknown): void {
             /* no receiver / background asleep */
         });
     }
+}
+
+export function sendMutationMessage(message: unknown): Promise<MutationResponse> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(message, (response?: MutationResponse) => {
+        const error = chrome.runtime.lastError;
+        if (error || !response) {
+          resolve({ status: 'error', code: 'runtime-error', message: error?.message || 'The change could not be saved.' });
+          return;
+        }
+        resolve(response);
+      });
+    } catch (error) {
+      resolve({ status: 'error', code: 'runtime-error', message: error instanceof Error ? error.message : 'The change could not be saved.' });
+    }
+  });
 }
 
 /** Copy text to the clipboard; returns whether it succeeded. */

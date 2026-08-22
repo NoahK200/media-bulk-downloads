@@ -3,8 +3,9 @@ import { createRoot, Root } from 'react-dom/client';
 import { SettingsData } from '@mbd/core/types';
 import Bubble from '@/extension/bubble/Bubble';
 import styles from '@/styles/index.css?inline';
+import { HOST_ID } from '@/extension/bubble/constants';
 
-export const HOST_ID = 'mbd-bubble-host';
+export { HOST_ID } from '@/extension/bubble/constants';
 const PROP_STYLE_ID = 'mbd-tw-properties';
 
 export interface BubbleController {

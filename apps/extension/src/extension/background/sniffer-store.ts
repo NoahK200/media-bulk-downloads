@@ -1,4 +1,4 @@
-import { ResolveHint, ResolvedMedia } from '@mbd/core/types';
+import { PassiveSnifferKind, ResolveHint, ResolvedMedia } from '@mbd/core/types';
 import { resolveOriginal, NetDeps } from '@mbd/core/resolvers/network';
 import { mediaIdFromPoster, pinTwimgUrl } from '@mbd/core/resolvers/sniffers/x-media-sniff';
 import { retryingFetch } from '@mbd/core/net/retry';
@@ -11,6 +11,28 @@ import { retryingFetch } from '@mbd/core/net/retry';
  * request. In-memory, bounded, dropped when the tab closes.
  */
 export const snifferByTab = new Map<number, Map<string, ResolvedMedia>>();
+export type PassiveSnifferSnapshot = Record<PassiveSnifferKind, unknown[]>;
+const passiveSnifferByTab = new Map<number, PassiveSnifferSnapshot>();
+const PASSIVE_CAP = 1_000;
+const emptyPassiveSnapshot = (): PassiveSnifferSnapshot => ({ ig: [], fb: [], pinterest: [], mangadex: [], hls: [] });
+
+export function storePassiveSnifferEntries(tabId: number, kind: PassiveSnifferKind, entries: unknown[]): void {
+  const snapshot = passiveSnifferByTab.get(tabId) ?? emptyPassiveSnapshot();
+  const target = snapshot[kind];
+  target.push(...entries);
+  if (target.length > PASSIVE_CAP) target.splice(0, target.length - PASSIVE_CAP);
+  passiveSnifferByTab.set(tabId, snapshot);
+}
+
+export function getPassiveSnifferSnapshot(tabId: number): PassiveSnifferSnapshot {
+  const snapshot = passiveSnifferByTab.get(tabId) ?? emptyPassiveSnapshot();
+  return Object.fromEntries(Object.entries(snapshot).map(([kind, entries]) => [kind, [...entries]])) as PassiveSnifferSnapshot;
+}
+
+export function clearPassiveSnifferEntries(tabId?: number): void {
+  if (tabId === undefined) passiveSnifferByTab.clear();
+  else passiveSnifferByTab.delete(tabId);
+}
 const SNIFF_CAP_PER_TAB = 800;
 
 /** Merge sniffed `[mediaId, ResolvedMedia]` pairs for a tab; the content script is

@@ -31,9 +31,7 @@ so all three stores match.
 - [ ] **Firefox account** created and the AMO developer agreement accepted at [addons.mozilla.org/developers](https://addons.mozilla.org/developers/).
 - [ ] `wxt.config.ts` sets the Firefox `gecko.id`, `strict_min_version: '140.0'`, and `data_collection_permissions: { required: ['none'] }`. `yarn build:firefox` emits
   `apps/extension/.output/firefox-mv3/manifest.json`.
-- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `tabs`, `contextMenus`, host `<all_urls>`; optional `notifications` and `declarativeNetRequestWithHostAccess` (both
-  requested at runtime). Note: `offscreen` is **Chrome-only** — `wxt.config.ts` omits it from the Firefox build (Firefox has no `chrome.offscreen`, and AMO rejects the permission), so HLS/DASH stream
-  capture is not available on Firefox.
+- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `scripting`, `tabs`, `contextMenus`, host `<all_urls>`; optional `notifications` is requested only at runtime. `offscreen` is Chrome-only and omitted; Firefox runs HLS/DASH capture in its DOM-capable background context.
 - [ ] Icons 16/32/48/64/128 present (`apps/extension/src/public/icon/`) — ✅ already in the build; AMO uses the manifest icons (no separate store logo).
 - [ ] `yarn lint` and `wxt build -b firefox` pass clean (AMO runs its own validator on upload too).
 - [ ] Privacy policy hosted at a public URL (see §6): `https://github.com/mralaminahamed/media-bulk-downloads/blob/main/PRIVACY.md`.
@@ -119,7 +117,7 @@ FASTER TO REACH
 • Back up and restore your settings, favourites, and history as a JSON file
 
 PRIVATE BY DESIGN
-• Network-free by default: it only reads what the page already loaded
+• Network- and observation-free by default: it only reads what the page already loaded
 • No accounts, no analytics, no servers — everything runs locally in your browser
 • Your settings and history never leave your device
 

@@ -100,13 +100,21 @@ test.describe('filters, search, and empty state', () => {
 
   test('the size-bucket control narrows to the dimensionless items', async ({ context }) => {
     const page = await openBubblePage(context, '/mixed.html');
+    await page.evaluate(() => {
+      const image = document.createElement('img');
+      image.alt = 'Known large';
+      image.width = 1200;
+      image.height = 1200;
+      image.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200"/%3E';
+      document.body.appendChild(image);
+    });
     await openPanel(page);
     const all = await itemCount(page);
-    expect(all).toBe(4);
+    expect(all).toBe(5);
 
     await page.getByRole('button', { name: 'More', exact: true }).click();
     await page.getByRole('group', { name: 'Image size' }).getByRole('button', { name: 'Large' }).click();
-    await expectItemCount(page, 2);
+    await expectItemCount(page, 3);
 
     await expect(page.getByRole('button', { name: 'Remove Size filter' })).toBeVisible();
     await page.getByRole('button', { name: 'Remove Size filter' }).click();

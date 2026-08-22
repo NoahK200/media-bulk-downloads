@@ -15,6 +15,7 @@ import { installResponseSniffer, makeSnifferEmit } from '@mbd/core/resolvers/sni
  * via installResponseSniffer.
  */
 export default defineContentScript({
+  registration: 'runtime',
   matches: ['*://*.instagram.com/*'],
   runAt: 'document_start',
   world: 'MAIN',

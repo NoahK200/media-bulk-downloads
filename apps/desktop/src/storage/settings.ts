@@ -52,12 +52,12 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
 const NUMBER_BOUNDS: Partial<Record<keyof DesktopSettings, [number, number]>> = {
   downloadConcurrency: [1, 10],
   nearDuplicateThreshold: [2, 16],
-  minimumImageSize: [0, Infinity],
-  deepScanMaxItems: [0, Infinity],
-  deepScanMaxSeconds: [0, Infinity],
-  deepScanMaxScrolls: [0, Infinity],
-  thumbnailSize: [1, Infinity],
-  previewSize: [1, Infinity],
+  minimumImageSize: [0, 10_000],
+  deepScanMaxItems: [0, 100_000],
+  deepScanMaxSeconds: [0, 600],
+  deepScanMaxScrolls: [0, 10_000],
+  thumbnailSize: [64, 240],
+  previewSize: [240, 900],
 };
 
 const NAMING_MODES = new Set(['original', 'prefixed']);
@@ -70,15 +70,16 @@ function sanitizeSettingValue<K extends keyof DesktopSettings>(
 ): DesktopSettings[K] {
   const fallback = DEFAULT_DESKTOP_SETTINGS[key];
   if (typeof fallback === 'number') {
-    const n = Number(incoming);
-    const safe = Number.isFinite(n) ? n : (fallback as number);
+    const safe = typeof incoming === 'number' && Number.isFinite(incoming)
+      ? incoming
+      : (current as number);
     const bounds = NUMBER_BOUNDS[key];
     const rounded = Math.round(safe);
     const clamped = bounds ? Math.min(bounds[1], Math.max(bounds[0], rounded)) : rounded;
     return clamped as DesktopSettings[K];
   }
   if (typeof fallback === 'boolean') {
-    return Boolean(incoming) as DesktopSettings[K];
+    return (typeof incoming === 'boolean' ? incoming : current) as DesktopSettings[K];
   }
   if (key === 'namingMode') {
     return (NAMING_MODES.has(incoming as string) ? incoming : current) as DesktopSettings[K];
@@ -86,7 +87,15 @@ function sanitizeSettingValue<K extends keyof DesktopSettings>(
   if (key === 'streamQuality') {
     return (STREAM_QUALITIES.has(incoming as string) ? incoming : current) as DesktopSettings[K];
   }
-  return (typeof incoming === 'string' ? incoming : fallback) as DesktopSettings[K];
+  return (typeof incoming === 'string' && incoming.length <= 1_024 ? incoming : current) as DesktopSettings[K];
+}
+
+export function sanitizeDesktopSettings(
+  input: unknown,
+  fallback: DesktopSettings = DEFAULT_DESKTOP_SETTINGS,
+): DesktopSettings {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { ...fallback };
+  return pickKnownSettings(fallback, input as Partial<DesktopSettings>);
 }
 
 /**
@@ -107,10 +116,10 @@ export function pickKnownSettings(current: DesktopSettings, patch: Partial<Deskt
 }
 
 export async function loadSettings(store: Store): Promise<DesktopSettings> {
-  const saved = await store.durableGet<Partial<DesktopSettings>>('settings');
-  return { ...DEFAULT_DESKTOP_SETTINGS, ...(saved ?? {}) };
+  const saved = await store.durableGet<unknown>('settings');
+  return sanitizeDesktopSettings(saved);
 }
 
 export async function saveSettings(store: Store, s: DesktopSettings): Promise<void> {
-  await store.durableSet('settings', s);
+  await store.durableSet('settings', sanitizeDesktopSettings(s));
 }

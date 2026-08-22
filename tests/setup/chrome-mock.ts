@@ -56,6 +56,12 @@ global.chrome = {
     search: vi.fn().mockResolvedValue([]),
     onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
   },
+  scripting: {
+    executeScript: vi.fn().mockResolvedValue([]),
+    registerContentScripts: vi.fn().mockResolvedValue(undefined),
+    unregisterContentScripts: vi.fn().mockResolvedValue(undefined),
+    getRegisteredContentScripts: vi.fn().mockResolvedValue([]),
+  },
 } as unknown as typeof chrome;
 
 // Reset the in-memory chrome.storage.local backing store after every test so

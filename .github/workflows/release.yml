@@ -50,9 +50,122 @@ jobs:
         run: yarn type-check
       - name: Run tests
         run: yarn test
+      - name: Audit production dependencies
+        run: yarn npm audit --all --recursive --environment production --severity moderate
+      - name: Install pinned Chromium
+        run: yarn workspace @mbd/extension playwright install --with-deps chromium
+      - name: Run built-extension E2E
+        run: yarn workspace @mbd/extension test:e2e:ci
+      - name: Build all browser targets
+        run: yarn build:all
+      - name: Build Safari target
+        run: yarn build:safari
+      - name: Verify generated manifests
+        run: yarn verify:manifests
+      - name: Enforce bundle budgets
+        run: yarn verify:bundles
+      - name: Validate Firefox package
+        run: yarn lint:firefox
+
+  edge-installed:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn build:edge
+      - name: Run shared E2E against installed Edge channel
+        env:
+          E2E_BROWSER_CHANNEL: msedge
+          E2E_EXTENSION_TARGET: edge-mv3
+        run: yarn workspace @mbd/extension playwright test
+      - run: yarn zip:edge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-edge
+          path: apps/extension/.output/*edge.zip
+
+  chrome-candidate:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-chrome
+          path: apps/extension/.output/*chrome.zip
+
+  firefox-installed:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn zip:firefox
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-firefox
+          path: apps/extension/.output/*firefox.zip
+      - run: python -m pip install --disable-pip-version-check selenium==4.35.0
+      - name: Install temporary XPI and run collection/settings/queue/download smoke
+        run: python scripts/firefox-installed-smoke.py "$(find apps/extension/.output -maxdepth 1 -name '*firefox*.zip' -print -quit)"
+
+  safari-unsigned:
+    needs: validate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn build:safari
+      - run: chmod +x apps/safari-native/convert.sh && apps/safari-native/convert.sh
+      - name: Build unsigned Safari host app
+        run: |
+          PROJECT="apps/safari-native/Media Bulk Downloads/Media Bulk Downloads.xcodeproj"
+          xcodebuild -project "$PROJECT" -scheme "Media Bulk Downloads" -configuration Debug -derivedDataPath apps/safari-native/DerivedData CODE_SIGNING_ALLOWED=NO build
+      - name: Launch converted host in XCTest smoke
+        run: |
+          APP="$(find apps/safari-native/DerivedData/Build/Products/Debug -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          MBD_SAFARI_APP="$APP" swift test --package-path apps/safari-native/SmokeTests
+
+  desktop-release:
+    needs: validate
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.5
+      - run: deno task --config apps/desktop/deno.json check
+      - run: deno task --config apps/desktop/deno.json test
 
   release:
-    needs: validate
+    needs: [validate, chrome-candidate, evidence]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +181,15 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-chrome
+          path: apps/extension/.output
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-evidence
+          path: release-evidence
+
       - name: Verify tag matches package.json
         if: github.event_name == 'push'
         run: |
@@ -77,10 +199,6 @@ jobs:
             echo "::error::Tag v$TAG does not match package.json version $PKG — bump package.json before tagging."
             exit 1
           fi
-
-      - name: Package all browser zips
-        if: github.event_name == 'push'
-        run: yarn zip:all
 
       - name: Extract changelog section for this version
         if: github.event_name == 'push'
@@ -104,11 +222,77 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
-          files: apps/extension/.output/*.zip
+          files: |
+            apps/extension/.output/*chrome.zip
+            release-evidence/**/evidence.json
+          fail_on_unmatched_files: true
+
+  evidence:
+    if: always() && needs.validate.result == 'success' && needs.chrome-candidate.result == 'success'
+    needs: [validate, chrome-candidate, edge-installed, firefox-installed, safari-unsigned, desktop-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn build:all && yarn build:safari
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: collected-artifacts
+          merge-multiple: true
+      - name: Generate immutable release evidence
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          EDGE_RESULT: ${{ needs.edge-installed.result }}
+          FIREFOX_RESULT: ${{ needs.firefox-installed.result }}
+          SAFARI_RESULT: ${{ needs.safari-unsigned.result }}
+          DESKTOP_RESULT: ${{ needs.desktop-release.result }}
+          SAFARI_MANUAL_OPERATOR: ${{ secrets.SAFARI_MANUAL_OPERATOR }}
+          SAFARI_MANUAL_DATE: ${{ secrets.SAFARI_MANUAL_DATE }}
+          SAFARI_MANUAL_DIGEST: ${{ secrets.SAFARI_MANUAL_DIGEST }}
+        run: yarn release:evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: release-evidence/**/evidence.json
+
+  release-edge:
+    if: github.event_name == 'push'
+    needs: [release, evidence, edge-installed]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-edge
+          path: artifacts
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: artifacts/*edge.zip
+          fail_on_unmatched_files: true
+
+  release-firefox:
+    if: github.event_name == 'push'
+    needs: [release, evidence, firefox-installed]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-firefox
+          path: artifacts
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: artifacts/*firefox.zip
           fail_on_unmatched_files: true
 
   publish-chrome:
-    needs: validate
+    needs: [validate, chrome-candidate, evidence]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,10 +303,10 @@ jobs:
         with:
           node-version: 22.x
           cache: yarn
-      - name: Install dependencies
-        run: yarn install --immutable
-      - name: Package Chrome zip
-        run: yarn zip
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-chrome
+          path: apps/extension/.output
 
       - name: Check Chrome Web Store secrets are set
         id: guard

@@ -7,7 +7,9 @@ describe('streamErrorMessage', () => {
     expect(streamErrorMessage('sample-aes')).toMatch(/SAMPLE-AES/i);
     expect(streamErrorMessage('demuxed-unsupported')).toMatch(/separately/i);
     expect(streamErrorMessage('audio-unavailable')).toMatch(/no separate audio/i);
-    expect(streamErrorMessage('too-large')).toMatch(/1 GB/);
+    expect(streamErrorMessage('too-large')).toMatch(/256 MiB/);
+    expect(streamErrorMessage('memory-limit')).toMatch(/in-memory/);
+    expect(streamErrorMessage('response-too-large')).toMatch(/64 MiB/);
   });
   it('falls back for an unknown code', () => {
     expect(streamErrorMessage('weird')).toMatch(/Couldn.t capture/i);

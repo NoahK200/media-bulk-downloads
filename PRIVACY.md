@@ -13,10 +13,11 @@ personal information.** All of its work happens locally in your browser.
 
 ## What the extension accesses
 
-- **The content of the page you are actively using.** When you open the popup or
-  the on-page panel, the extension reads the page's media elements (image, video,
-  and audio URLs and their dimensions/types) so it can list them. This runs on the
-  page you choose to use it on; it is not sent anywhere.
+- **The content of the page you actively choose to scan.** Opening the popup,
+  using a download command, or enabling the on-page panel injects the collector
+  into that page and reads its media elements locally. Optional automatic toolbar
+  counts can scan pages in the background only after you enable that local
+  privacy control.
 - **The active tab's URL and title.** Used only to label a download with the page
   it came from (shown in your local download history) and, when you click "Open
   source", to open that URL in a new tab.
@@ -25,6 +26,9 @@ personal information.** All of its work happens locally in your browser.
 
 - **Your settings** — via `chrome.storage.sync` (so they follow your Chrome
   profile). No content, only preferences.
+- **Privacy consent** — stored only in `chrome.storage.local` on this browser.
+  Automatic scanning, media-request observation, and authenticated Sankaku
+  resolution never sync and are never included in backups.
 - **Your download history** — via `chrome.storage.local`. A list of files you
   downloaded through the extension (filename, source page, timestamp, thumbnail
   URL).
@@ -48,11 +52,9 @@ any of it to a JSON file and re-import it (Settings → Backup).
 
 ## Network requests
 
-By default the extension is **network-free** — it only reads what the page has
+By default the extension is **network-free and observation-free** — it only reads what the page has
 already loaded and hands URLs to Chrome's download manager. A few features make
-network requests, each **opt-in** and each going only to the item's own media
-host (the same host your browser already loads that page's media from), carrying
-no identifying information beyond a normal browser request to that host:
+network requests or observe page requests, each behind an explicit control:
 
 - **"Resolve exact originals"** (off by default) fetches a higher-resolution
   version of an item you are downloading from that item's own media host. It
@@ -61,14 +63,21 @@ no identifying information beyond a normal browser request to that host:
   Vimeo, Dailymotion, Mastodon, YouTube, Booru sites, and similar; for most items
   the original is derived with no network call at all. The current list lives in
   [https://mralaminahamed.github.io/media-bulk-downloads/how-it-works/resolve-originals/](https://mralaminahamed.github.io/media-bulk-downloads/how-it-works/resolve-originals/).
+- On a Shopify product page, Resolve exact originals may request the store's
+  public same-origin `/products/<handle>.js` endpoint with credentials omitted.
 - **HLS / DASH stream capture** (triggered per item, only when you capture a
   stream) fetches the stream's manifest and its media segments from the stream's
   own host to assemble the file locally. Nothing about you is sent; it only
   requests the segments the player itself would.
-- A **passive network sniffer** notes the request URLs of `.m3u8` / `.mpd`
-  manifests the page's own player fetches, so a stream that never appears in the
-  page can still be captured. It only observes request URLs (never response
-  bodies) and forges no requests of its own.
+- **Observe media requests** is a separate, local-only control. When enabled,
+  the extension notes `.m3u8`/`.mpd` request URLs and, on supported sites such
+  as Facebook, Instagram, X, Pinterest, and MangaDex, reads selected media API
+  response bodies to extract media URLs. Raw bodies are never persisted or sent
+  off the device. Disabling the control stops observation immediately; reload a
+  page after enabling it to capture requests made during page startup.
+- **Use my logged-in Sankaku session** is local-only and off by default. When
+  enabled, an explicit original-resolution action may send the browser's existing
+  Sankaku cookie only to the pinned Sankaku API. It is never enabled by backup or sync.
 - **"Retry with page referer"** (only when you click it on a download a site
   blocked with HTTP 403) sets that one request's `Referer`/`Origin` to the item's
   source page so the file downloads, then removes the rule.
@@ -84,8 +93,8 @@ like clicking any link on a web page.
 See the extension's Chrome Web Store listing for a plain-language justification of
 each permission. In short: `downloads`/`downloads.open` save and open your files,
 `storage` keeps your settings and history on your device, `tabs` labels downloads
-with their source page, and host access lets the extension read media on the page
-you are using.
+  with their source page, `scripting` injects the collector only after an action
+  or local consent, and host access lets the extension read media on selected pages.
 
 Two permissions are **optional** and requested only when you turn the matching
 feature on, never at install: `notifications` (a local desktop toast when a

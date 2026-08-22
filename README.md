@@ -108,8 +108,10 @@ It reads only what the page already loaded, so nothing leaves your device.
   (history, favourites, blocked sources) in one step (Settings → Data)
 
 **Private by design**
-- **Network-free by default** — collection reads only what the page already loaded
+- **Network- and observation-free by default** — collection reads only what the page already loaded
 - No accounts, no analytics, no servers; settings and history never leave your device
+- Automatic badge scans, passive request observation, and logged-in Sankaku
+  resolution are separate local-only controls, disabled until you approve them
 - Full policy in [PRIVACY.md](./PRIVACY.md)
 
 ## Install
@@ -215,6 +217,7 @@ an image for **Download image (original quality)** and **Add image to Favourites
 | `downloads`      | Save selected media via the browser's download manager                    |
 | `downloads.open` | Open a downloaded file from the in-app history                            |
 | `storage`        | Keep your settings and download history locally on your device            |
+| `scripting`      | Inject the collector after your action or local automatic-scan consent     |
 | `tabs`           | Read the active tab's URL/title to label downloads and open a source page |
 | `contextMenus`   | Add right-click actions (download all / this image, add to favourites)    |
 | `offscreen`      | Assemble HLS/DASH video streams (fetch + join segments) in the background  |
@@ -274,14 +277,18 @@ capture keeps running even if you close the popup.
 
 **Not captured, by design:** **DRM** (Widevine / PlayReady / FairPlay,
 `SAMPLE-AES`) and **live** streams — capturing them would breach the stream's DRM
-and Chrome Web Store policy. Streams larger than the ~1 GB size cap report a
-message rather than exhausting memory.
+and Chrome Web Store policy. Direct HLS TS/AAC and single-track fragmented MP4
+capture can spool to origin-private file storage up to 2 GiB, subject to quota.
+Mux-heavy HLS/DASH and memory fallback paths stop at 256 MiB; manifests stop at
+8 MiB and every individual response at 64 MiB. Oversized captures fail with a
+specific message instead of exhausting the extension host.
 
 Streams are found two ways: in the page DOM, and via a passive, MAIN-world
 **network sniffer** that notes the `.m3u8` manifests `hls.js` / native players
 fetch over XHR — the common modern case, where the manifest never touches the
-DOM. The sniffer only observes request URLs (never response bodies) and forges no
-requests of its own.
+DOM. The all-site HLS sniffer observes request URLs only. Separately consented,
+site-scoped integrations can inspect selected media API response bodies locally;
+raw bodies are never stored. Neither path forges requests of its own.
 
 ## Tech stack
 
@@ -302,9 +309,11 @@ Media Bulk Downloads runs **entirely inside your browser**. It does **not** use
 **Scrapfly**, any third-party scraping API, or an external proxy service — no request
 is ever routed through a server operated by us or anyone else. There is no backend.
 
-- **Collection is network-free by default** — it reads the media already present in
-  the page's DOM. The optional HLS sniffer only *observes* the manifest URLs a player
-  fetches (URLs only, never response bodies) and forges no requests of its own.
+- **Collection is network-free and observation-free by default** — no page script
+  is registered on a fresh install. User actions inject the DOM collector once;
+  local-only privacy controls separately enable automatic badge scans or passive
+  request observation. The HLS observer records URLs only, while supported-site
+  sniffers inspect selected API response bodies locally and never persist them.
 - **When it does fetch** — the opt-in *Resolve originals* setting and HLS/DASH
   **Capture** — it uses the browser's built-in `fetch`/XHR to request the file
   **directly from the site's own origin/CDN**, with no intermediary.
@@ -373,7 +382,8 @@ Contributions are welcome — please read the [Contributing Guide](./CONTRIBUTIN
 Before opening a PR, make sure the full gate passes:
 
 ```bash
-yarn type-check && yarn lint && yarn test && yarn build
+yarn type-check && yarn lint && yarn test && yarn build:all && yarn build:safari
+yarn verify:manifests && yarn verify:bundles && yarn lint:firefox
 ```
 
 The end-to-end suite runs separately (it builds and loads the extension in real
@@ -383,6 +393,9 @@ Chromium):
 yarn test:e2e          # headless
 yarn test:e2e:headed   # visible browser
 ```
+
+Release proof levels, browser-specific gates, the signed Safari checklist, and
+immutable evidence format are documented in [Release validation and evidence](./docs/RELEASE_VALIDATION.md).
 
 ## Security
 

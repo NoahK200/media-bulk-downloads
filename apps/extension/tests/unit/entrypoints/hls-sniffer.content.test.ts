@@ -3,6 +3,8 @@ import type { Mock } from 'vitest';
 vi.mock('@mbd/core/resolvers/sniffers/response-sniffer', () => ({
   installUrlSniffer: vi.fn(),
   installReplayOnReady: vi.fn(),
+  isObservationActive: vi.fn(() => true),
+  onObservationStop: vi.fn(),
 }));
 
 import { installUrlSniffer, installReplayOnReady } from '@mbd/core/resolvers/sniffers/response-sniffer';

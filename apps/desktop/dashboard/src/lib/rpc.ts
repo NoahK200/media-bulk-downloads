@@ -34,13 +34,9 @@ export interface FavouriteEntry {
   time: number;
 }
 
-// The laufey webview drops the query string on navigate, so the session token
-// is embedded in the HTML shell (server.ts replaces `__MBD_TOKEN__`) and read
-// from there. The query string is a fallback for environments that keep it
-// (e.g. opening the dashboard in a normal browser).
+// The token is embedded only in the unguessable authenticated shell path.
 const embedded = document.querySelector('meta[name="mbd-token"]')?.getAttribute('content') ?? '';
-const token = (embedded && embedded !== '__MBD_TOKEN__' ? embedded : null) ??
-  new URLSearchParams(location.search).get('token') ?? '';
+const token = embedded && embedded !== '__MBD_TOKEN__' ? embedded : '';
 const h = { 'x-mbd-token': token, 'content-type': 'application/json' };
 
 async function toJson(res: Response): Promise<unknown> {
@@ -63,9 +59,31 @@ export const api = {
 };
 
 export function subscribe(handlers: Record<string, (data: unknown) => void>): () => void {
-  const es = new EventSource('/events?token=' + token);
-  for (const [ev, cb] of Object.entries(handlers)) {
-    es.addEventListener(ev, (e) => cb(JSON.parse((e as MessageEvent).data)));
-  }
-  return () => es.close();
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      const response = await fetch('/events', { headers: h, signal: controller.signal });
+      if (!response.ok || !response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        let boundary: number;
+        while ((boundary = pending.indexOf('\n\n')) >= 0) {
+          const frame = pending.slice(0, boundary);
+          pending = pending.slice(boundary + 2);
+          const event = frame.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+          const data = frame.match(/^data:\s*(.*)$/m)?.[1];
+          if (!event || data === undefined || !handlers[event]) continue;
+          try { handlers[event](JSON.parse(data)); } catch { /* malformed event */ }
+        }
+      }
+    } catch {
+      // Closing the dashboard aborts the stream; reconnect is handled by remount.
+    }
+  })();
+  return () => controller.abort();
 }

@@ -1,5 +1,5 @@
 import { Dispatch, RefObject, SetStateAction, useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, DeepScanProgress, DeepScanStopReason, FilterOptions, ImageInfo, SettingsData } from '@mbd/core/types';
+import { AppState, DeepScanProgress, DeepScanStopReason, FilterOptions, ImageInfo, ResolveCredentialScope, SettingsData } from '@mbd/core/types';
 import { filterImagesBySettings, applyToolbarFilters, filterExcluded, ExcludedMatchers } from '@mbd/core/collection/filters';
 import { mergeScannedMedia } from '@mbd/core/collection/merge';
 import { loadStoredSettings } from '@mbd/storage/settings';
@@ -11,6 +11,8 @@ import { pageDefaults } from '@mbd/core/collection/pageType';
 import { DEFAULT_FILTERS } from '@/extension/popup/components/FilterToolbar';
 import { getImageFileSize, mapWithConcurrency } from '@/extension/popup/utils';
 import { SIZE_FETCH_CONCURRENCY, deepScanCapMessage, pendingVideos } from '@/extension/popup/lib/appHelpers';
+
+const NO_CREDENTIAL_SCOPES: ResolveCredentialScope[] = [];
 
 export interface UseMediaEngineParams {
   settings: SettingsData;
@@ -26,6 +28,7 @@ export interface UseMediaEngineParams {
   collect: () => Promise<ImageInfo[]>;
   deepScan: (onProgress: (p: DeepScanProgress) => void) => Promise<ImageInfo[]>;
   abortDeepScan: () => void;
+  credentialScopes?: ResolveCredentialScope[];
 }
 
 export interface UseMediaEngineResult {
@@ -69,6 +72,7 @@ export function useMediaEngine({
   collect,
   deepScan,
   abortDeepScan,
+  credentialScopes = NO_CREDENTIAL_SCOPES,
 }: UseMediaEngineParams): UseMediaEngineResult {
   const [state, setState] = useState<AppState>({
     status: '',
@@ -87,12 +91,14 @@ export function useMediaEngine({
     return () => window.removeEventListener('pagehide', onHide);
   }, [abortDeepScan]);
   const [filterSeed, setFilterSeed] = useState<Partial<FilterOptions>>({});
+  const isDownloadedRef = useRef(isDownloaded);
+  isDownloadedRef.current = isDownloaded;
 
   useEffect(() => {
     if (filtersRef.current.downloadState !== 'all') {
-      setState((prev) => ({ ...prev, filteredImages: applyToolbarFilters(prev.images, filtersRef.current, isDownloaded) }));
+      setState((prev) => ({ ...prev, filteredImages: applyToolbarFilters(prev.images, filtersRef.current, isDownloadedRef.current) }));
     }
-  }, [downloadedSrcs, isDownloaded]);
+  }, [downloadedSrcs]);
 
   const [resolveFailedSrcs, setResolveFailedSrcs] = useState<Set<string>>(new Set());
   const [fetchingSrcs, setFetchingSrcs] = useState<Set<string>>(new Set());
@@ -136,7 +142,7 @@ export function useMediaEngine({
         return {
           ...prev,
           images: nextImages,
-          filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloaded),
+          filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloadedRef.current),
         };
       });
     });
@@ -155,7 +161,7 @@ export function useMediaEngine({
     const generation = ++enrichOriginalsGenRef.current;
     const targets = eligible.filter((i) => i.resolveHint).map((i) => ({ src: i.src, hint: i.resolveHint! }));
     if (!targets.length) return;
-    const resolved = await requestResolveOriginals(targets);
+    const resolved = await requestResolveOriginals(targets, credentialScopes);
     if (generation !== enrichOriginalsGenRef.current) return;
 
     const byOldSrc = new Map<string, ImageInfo>();
@@ -182,10 +188,10 @@ export function useMediaEngine({
       return {
         ...prev,
         images: nextImages,
-        filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloaded),
+        filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloadedRef.current),
       };
     });
-  }, [excludedRef, settingsRef]);
+  }, [credentialScopes, excludedRef, settingsRef]);
 
   /**
    * Applies the resolve-originals gate to an eligible list, shared by every scan
@@ -197,10 +203,12 @@ export function useMediaEngine({
    */
   const applyResolution = useCallback(
     (eligible: ImageInfo[], s: SettingsData): void => {
-      const filtered = applyToolbarFilters(eligible, filtersRef.current, isDownloaded);
+      const filtered = applyToolbarFilters(eligible, filtersRef.current, isDownloadedRef.current);
       setState((prev) => ({ ...prev, images: eligible, filteredImages: filtered }));
       if (s.resolveOriginals) void enrichOriginals(eligible, s.captureHlsStreams);
-      void enrichImageSizes(eligible);
+      // Remote HEAD enrichment is network access, so it shares the explicit
+      // Resolve Originals opt-in instead of running on every popup open.
+      if (s.resolveOriginals) void enrichImageSizes(eligible);
     },
     [enrichOriginals, enrichImageSizes],
   );
@@ -285,7 +293,7 @@ export function useMediaEngine({
 
   const handleFilterChange = (filters: FilterOptions) => {
     filtersRef.current = filters;
-    setState((prev) => ({ ...prev, filteredImages: applyToolbarFilters(prev.images, filters, isDownloaded), status: '' }));
+    setState((prev) => ({ ...prev, filteredImages: applyToolbarFilters(prev.images, filters, isDownloadedRef.current), status: '' }));
   };
 
   /**
@@ -300,7 +308,7 @@ export function useMediaEngine({
     const generation = resolveGenRef.current;
     setFetchingSrcs((p) => new Set(p).add(src));
     setResolveFailedSrcs((p) => { const n = new Set(p); n.delete(src); return n; });
-    const resolved = await requestResolveOriginals([{ src, hint: image.resolveHint }]);
+    const resolved = await requestResolveOriginals([{ src, hint: image.resolveHint }], credentialScopes);
     setFetchingSrcs((p) => { const n = new Set(p); n.delete(src); return n; });
     if (generation !== resolveGenRef.current) return;
     const r = resolved[src];
@@ -314,7 +322,7 @@ export function useMediaEngine({
     setState((prev) => {
       const images = swap(prev.images);
       const eligible = filterExcluded(filterImagesBySettings(images, settingsRef.current), excludedRef.current);
-      return { ...prev, images, filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloaded) };
+      return { ...prev, images, filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloadedRef.current) };
     });
   };
 
@@ -336,7 +344,10 @@ export function useMediaEngine({
 
     let resolved: Awaited<ReturnType<typeof requestResolveOriginals>>;
     try {
-      resolved = await requestResolveOriginals(targets.map((t) => ({ src: t.src, hint: t.resolveHint! })));
+      resolved = await requestResolveOriginals(
+        targets.map((t) => ({ src: t.src, hint: t.resolveHint! })),
+        credentialScopes,
+      );
     } finally {
       setProgress(null);
       setFetchingAllVideos(false);
@@ -358,7 +369,7 @@ export function useMediaEngine({
     setState((prev) => {
       const images = swap(prev.images);
       const eligible = filterExcluded(filterImagesBySettings(images, settingsRef.current), excludedRef.current);
-      return { ...prev, images, filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloaded) };
+      return { ...prev, images, filteredImages: applyToolbarFilters(eligible, filtersRef.current, isDownloadedRef.current) };
     });
   };
 

@@ -4,6 +4,8 @@ vi.mock('@mbd/core/resolvers/sniffers/response-sniffer', () => ({
   installResponseSniffer: vi.fn(),
   makeSnifferEmit: vi.fn(() => () => {}),
   installReplayOnReady: vi.fn(),
+  isObservationActive: vi.fn(() => true),
+  onObservationStop: vi.fn(),
 }));
 
 import { installResponseSniffer, makeSnifferEmit, installReplayOnReady } from '@mbd/core/resolvers/sniffers/response-sniffer';

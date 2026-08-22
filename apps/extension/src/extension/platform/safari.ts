@@ -22,7 +22,7 @@ export const safariDownloader: Downloader = {
       let objectUrl: string | undefined;
       if (/^https?:/i.test(req.url)) {
         const res = await fetch(req.url);
-        if (!res.ok) return undefined;
+        if (!res.ok) return { kind: 'failed', code: `http-${res.status}` };
         objectUrl = URL.createObjectURL(await res.blob());
         href = objectUrl;
       }
@@ -34,9 +34,9 @@ export const safariDownloader: Downloader = {
       a.click();
       a.remove();
       if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
-      return 1;
+      return { kind: 'untracked' };
     } catch {
-      return undefined;
+      return { kind: 'failed', code: 'download-rejected' };
     }
   },
   search: async () => [], // no downloads API → no on-disk history to query
@@ -62,4 +62,5 @@ export const safariCaptureHost: StreamCaptureHost = {
   available: true,
   ensureReady: async () => {},
   run: (req: CaptureRunRequest) => import('./run-capture').then((m) => m.runCaptureInProcess(req)),
+  cleanup: (cleanupToken) => import('@/extension/capture/capture-sink').then((m) => m.cleanupCaptureArtifact(cleanupToken)),
 };

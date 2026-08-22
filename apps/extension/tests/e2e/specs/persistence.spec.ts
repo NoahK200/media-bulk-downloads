@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension';
 import { openBubblePage, openPanel } from '../helpers/bubble';
 import type { Page } from '@playwright/test';
 
-const fbItem = (page: Page) => page.locator('figure', { has: page.locator('img[src*="fbcdn"]') });
+const fbItem = (page: Page) => page.locator('figure[data-media-src*="fbcdn"]');
 
 async function secondPage(page: Page): Promise<Page> {
   const p2 = await page.context().newPage();

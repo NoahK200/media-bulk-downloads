@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals, assertRejects } from 'jsr:@std/assert';
 import { openStore } from '../../src/storage/kv.ts';
 import { loadSettings, saveSettings } from '../../src/storage/settings.ts';
 import { loadHistory, recordDownloads, type StoredHistoryEntry } from '../../src/storage/history.ts';
@@ -156,10 +156,12 @@ Deno.test('POST /api/capture invokes the injected capture dep with src', async (
   const store = await openStore(await Deno.makeTempFile({ suffix: '.kv' }));
   let settings = await loadSettings(store);
   const calls: string[] = [];
+  const media = createMediaStore();
+  media.merge([{ src: 'https://x/v.m3u8', kind: 'video', hlsManifest: 'https://x/v.m3u8' }]);
   const routes = buildRoutes({
     store,
     queue: fakeQueue,
-    media: createMediaStore(),
+    media,
     sse: createSseHub(),
     settings: () => settings,
     setSettings: async (s) => { settings = s; await saveSettings(store, s); },
@@ -168,19 +170,21 @@ Deno.test('POST /api/capture invokes the injected capture dep with src', async (
     exportData: async () => ({ version: 1, settings, history: await loadHistory(store), favourites: await loadFavourites(store) }),
     importData: async () => ({ history: 0, favourites: 0 }),
   });
-  const res = await routes['POST /api/capture'](json({ src: 'x' }), new URL('http://x/api/capture'));
+  const res = await routes['POST /api/capture'](json({ src: 'https://x/v.m3u8' }), new URL('http://x/api/capture'));
   assertEquals(await res.json(), { ok: true });
-  assertEquals(calls, ['x']);
+  assertEquals(calls, ['https://x/v.m3u8']);
   store.close();
 });
 
 Deno.test('POST /api/capture is a no-op (still 200) when capture dep is absent', async () => {
   const store = await openStore(await Deno.makeTempFile({ suffix: '.kv' }));
   let settings = await loadSettings(store);
+  const media = createMediaStore();
+  media.merge([{ src: 'https://x/v.m3u8', kind: 'video', hlsManifest: 'https://x/v.m3u8' }]);
   const routes = buildRoutes({
     store,
     queue: fakeQueue,
-    media: createMediaStore(),
+    media,
     sse: createSseHub(),
     settings: () => settings,
     setSettings: async (s) => { settings = s; await saveSettings(store, s); },
@@ -188,7 +192,7 @@ Deno.test('POST /api/capture is a no-op (still 200) when capture dep is absent',
     exportData: async () => ({ version: 1, settings, history: await loadHistory(store), favourites: await loadFavourites(store) }),
     importData: async () => ({ history: 0, favourites: 0 }),
   });
-  const res = await routes['POST /api/capture'](json({ src: 'x' }), new URL('http://x/api/capture'));
+  const res = await routes['POST /api/capture'](json({ src: 'https://x/v.m3u8' }), new URL('http://x/api/capture'));
   assertEquals(await res.json(), { ok: true });
   store.close();
 });
@@ -288,5 +292,66 @@ Deno.test('export returns settings + history + favourites; import merges without
   assertEquals(exportedAfter.favourites.length, 2);
   assertEquals(exportedAfter.settings.fileNamePrefix, 'imported_');
 
+  store.close();
+});
+
+Deno.test('JSON routes reject malformed and oversized request bodies', async () => {
+  const store = await openStore(await Deno.makeTempFile({ suffix: '.kv' }));
+  const settings = await loadSettings(store);
+  const routes = buildRoutes({
+    store,
+    queue: fakeQueue,
+    media: createMediaStore(),
+    sse: createSseHub(),
+    settings: () => settings,
+    setSettings: async () => {},
+    navigate: () => {},
+    exportData: async () => ({ version: 1, settings, history: [], favourites: [] }),
+    importData: async () => ({ history: 0, favourites: 0 }),
+  });
+  await assertRejects(
+    async () => await routes['PUT /api/settings'](
+      new Request('http://x/', { method: 'PUT', body: '{broken' }),
+      new URL('http://x/api/settings'),
+    ),
+    Error,
+    '400',
+  );
+  await assertRejects(
+    async () => await routes['POST /api/import'](
+      new Request('http://x/', {
+        method: 'POST',
+        body: 'x'.repeat(1024 * 1024 + 1),
+        headers: { 'content-length': String(1024 * 1024 + 1) },
+      }),
+      new URL('http://x/api/import'),
+    ),
+    Error,
+    '413',
+  );
+  store.close();
+});
+
+Deno.test('navigation rejects non-HTTP schemes', async () => {
+  const store = await openStore(await Deno.makeTempFile({ suffix: '.kv' }));
+  const settings = await loadSettings(store);
+  let navigated = false;
+  const routes = buildRoutes({
+    store,
+    queue: fakeQueue,
+    media: createMediaStore(),
+    sse: createSseHub(),
+    settings: () => settings,
+    setSettings: async () => {},
+    navigate: () => { navigated = true; },
+    exportData: async () => ({ version: 1, settings, history: [], favourites: [] }),
+    importData: async () => ({ history: 0, favourites: 0 }),
+  });
+  await assertRejects(
+    async () => await routes['POST /api/navigate'](json({ url: 'file:///etc/passwd' }), new URL('http://x/api/navigate')),
+    Error,
+    '400',
+  );
+  assertEquals(navigated, false);
   store.close();
 });

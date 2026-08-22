@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, withDefaults } from '@mbd/storage/settings';
+import { DEFAULT_SETTINGS, sanitizeSettings, withDefaults } from '@mbd/storage/settings';
 
 describe('DEFAULT_SETTINGS naming/saveAs defaults', () => {
   it('defaults to prefixed naming and no save-as dialog', () => {
@@ -54,12 +54,6 @@ describe('resolveOriginals setting', () => {
   });
   it('withDefaults backfills it for old stored settings', () => {
     expect(withDefaults({}).resolveOriginals).toBe(false);
-  });
-});
-
-describe('sankakuAuthedOriginals setting', () => {
-  it('defaults sankakuAuthedOriginals to false (Tier-2 opt-in, off by default)', () => {
-    expect(DEFAULT_SETTINGS.sankakuAuthedOriginals).toBe(false);
   });
 });
 
@@ -190,5 +184,41 @@ describe('skipDuplicateDownloads setting', () => {
   });
   it('preserves an explicit opt-out through withDefaults', () => {
     expect(withDefaults({ skipDuplicateDownloads: false }).skipDuplicateDownloads).toBe(false);
+  });
+});
+
+describe('sanitizeSettings — exhaustive trust boundary', () => {
+  it('repairs malicious scalar, enum, nested, and oversized values', () => {
+    const { settings, repairs } = sanitizeSettings({
+      downloadPath: { replace: 'not-a-function' },
+      fileNamePrefix: 'x'.repeat(2_000),
+      saveAs: 'yes',
+      namingMode: 'attacker-mode',
+      bubblePosition: { corner: 'middle', x: Infinity, y: 50_000 },
+      bubblePanelPoint: null,
+      streamQuality: 'ultra',
+      audioFormat: ['mp3-320'],
+      unknownSetting: true,
+    });
+    expect(settings.downloadPath).toBe(DEFAULT_SETTINGS.downloadPath);
+    expect(settings.fileNamePrefix).toHaveLength(1_024);
+    expect(settings.saveAs).toBe(DEFAULT_SETTINGS.saveAs);
+    expect(settings.namingMode).toBe(DEFAULT_SETTINGS.namingMode);
+    expect(settings.bubblePosition).toEqual({ corner: 'bottom-right', x: 20, y: 10_000 });
+    expect(settings.bubblePanelPoint).toEqual(DEFAULT_SETTINGS.bubblePanelPoint);
+    expect(settings.streamQuality).toBe('auto');
+    expect(settings.audioFormat).toBe('m4a');
+    expect(repairs.map((repair) => repair.key)).toEqual(expect.arrayContaining([
+      'downloadPath', 'fileNamePrefix', 'saveAs', 'namingMode',
+      'bubblePosition.corner', 'bubblePosition.x', 'bubblePosition.y',
+      'bubblePanelPoint', 'streamQuality', 'audioFormat',
+    ]));
+    expect(settings).not.toHaveProperty('unknownSetting');
+  });
+
+  it('accepts the complete default schema without repairs', () => {
+    const { settings, repairs } = sanitizeSettings(DEFAULT_SETTINGS);
+    expect(settings).toEqual(DEFAULT_SETTINGS);
+    expect(repairs).toEqual([]);
   });
 });

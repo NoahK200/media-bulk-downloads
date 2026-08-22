@@ -58,7 +58,7 @@ describe('deepScanActiveTab — scan lifecycle', () => {
     const onProgress = vi.fn();
 
     const p = deepScanActiveTab(onProgress);
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const listener = addL.mock.calls.at(-1)![0];
 
     listener({ type: 'DEEP_SCAN_PROGRESS', found: 1 } as unknown as DeepScanProgress, { tab: { id: 99 } });
@@ -98,13 +98,13 @@ describe('deepScanActiveTab — scan lifecycle', () => {
     let doneA!: (media: unknown) => void;
     tabsSend.mockImplementationOnce((_id, _msg, cb) => { doneA = cb; });
     const scanA = deepScanActiveTab(vi.fn());
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     query.mockResolvedValueOnce([{ id: 9 }]);
     let doneB!: (media: unknown) => void;
     tabsSend.mockImplementationOnce((_id, _msg, cb) => { doneB = cb; });
     const scanB = deepScanActiveTab(vi.fn());
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     doneA([]);
     await scanA;

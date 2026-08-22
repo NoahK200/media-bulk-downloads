@@ -22,8 +22,19 @@ const onActivated = (chrome.tabs.onActivated.addListener as Mock).mock.calls[0][
 const onUpdated = (chrome.tabs.onUpdated.addListener as Mock).mock.calls[0][0];
 const onDownloadChanged = (chrome.downloads.onChanged.addListener as Mock).mock.calls[0][0];
 
-const setSettings = (patch: Partial<SettingsData>) =>
-  onChanged({ settings: { newValue: patch } }, 'sync');
+const setSettings = (patch: Partial<SettingsData> & { automaticBadgeScanning?: boolean }) => {
+  const { automaticBadgeScanning, ...settings } = patch;
+  onChanged({ settings: { newValue: settings } }, 'sync');
+  if (automaticBadgeScanning !== undefined) {
+    onChanged({ privacyPreferences: { newValue: {
+      version: 1,
+      reviewComplete: true,
+      automaticBadgeScanning,
+      observeMediaRequests: false,
+      sankakuSessionResolution: false,
+    } } }, 'local');
+  }
+};
 
 describe('background DOWNLOAD_IMAGES handler', () => {
   beforeEach(() => {
@@ -77,7 +88,8 @@ describe('background DOWNLOAD_IMAGES handler', () => {
     onMessage({ type: 'DOWNLOAD_IMAGES', images: [img({ src: 'a.jpg' })] }, {}, sendResponse);
     await flush();
     await flush();
-    expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({ status: expect.any(String) }));
+    expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+    expect(chrome.downloads.download).not.toHaveBeenCalled();
   });
 
   it('applies the download path and prefix from settings', async () => {
@@ -316,6 +328,8 @@ describe('background favourite handlers', () => {
 });
 
 describe('background onInstalled', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
   it('loads settings and (re)creates the four context menus on install', () => {
     (chrome.storage.sync.get as Mock).mockClear().mockImplementation((_k, cb) => cb({}));
     (chrome.contextMenus.create as Mock).mockClear();
@@ -326,6 +340,26 @@ describe('background onInstalled', () => {
     expect(chrome.storage.sync.get).toHaveBeenCalledWith(['settings'], expect.any(Function));
     const ids = (chrome.contextMenus.create as Mock).mock.calls.map((c) => c[0].id);
     expect(ids).toEqual(['mbd-download-all', 'mbd-download-image', 'mbd-favourite-image', 'mbd-download-media']);
+  });
+
+  it('fails privacy consent closed on upgrade and requires a new review', async () => {
+    (chrome.storage.sync.get as Mock).mockImplementation((_k, cb) => cb({}));
+    (chrome.storage.local.set as Mock).mockReset().mockResolvedValue(undefined);
+    (chrome.tabs.query as Mock).mockImplementation((_q: unknown, cb?: (tabs: unknown[]) => void) => cb?.([]));
+
+    onInstalled({ reason: 'update', previousVersion: '1.3.0' });
+    await flush();
+    await flush();
+
+    expect(chrome.storage.local.set).toHaveBeenCalledWith({
+      privacyPreferences: {
+        version: 1,
+        reviewComplete: false,
+        automaticBadgeScanning: false,
+        observeMediaRequests: false,
+        sankakuSessionResolution: false,
+      },
+    });
   });
 });
 
@@ -369,18 +403,18 @@ describe('background tab lifecycle listeners', () => {
   });
 
   it('refreshes the badge and the action mode when a tab is activated (count on)', async () => {
-    setSettings({ showImageCount: true });
+    setSettings({ automaticBadgeScanning: true });
     (chrome.tabs.get as Mock).mockImplementation((_id: number, cb: (t: unknown) => void) => cb({ id: 3, url: 'https://example.com' }));
 
     onActivated({ tabId: 3 });
     await flush();
 
-    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(3, 'GET_IMAGES', expect.any(Function));
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(3, { type: 'GET_IMAGES', allowNetwork: false }, expect.any(Function));
     expect(chrome.action.setPopup).toHaveBeenCalledWith({ tabId: 3, popup: 'popup.html' });
   });
 
   it('skips the badge (count off) and the action-mode update when tabs.get lastErrors', () => {
-    setSettings({ showImageCount: false });
+    setSettings({ automaticBadgeScanning: false });
     (chrome.tabs.get as Mock).mockImplementation((_id: number, cb: (t: unknown) => void) => {
       (chrome.runtime as unknown as { lastError?: unknown }).lastError = { message: 'No tab with id: 99' };
       cb(undefined);
@@ -394,17 +428,17 @@ describe('background tab lifecycle listeners', () => {
   });
 
   it('on load complete, syncs the action mode and refreshes the badge (count on)', async () => {
-    setSettings({ showImageCount: true });
+    setSettings({ automaticBadgeScanning: true });
 
     onUpdated(7, { status: 'complete' }, { url: 'https://example.com' });
     await flush();
 
     expect(chrome.action.setPopup).toHaveBeenCalledWith({ tabId: 7, popup: 'popup.html' });
-    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(7, 'GET_IMAGES', expect.any(Function));
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(7, { type: 'GET_IMAGES', allowNetwork: false }, expect.any(Function));
   });
 
   it('shows a placeholder badge while a tab is loading (count on)', () => {
-    setSettings({ showImageCount: true });
+    setSettings({ automaticBadgeScanning: true });
 
     onUpdated(8, { status: 'loading' }, { url: 'https://example.com' });
 
@@ -413,7 +447,7 @@ describe('background tab lifecycle listeners', () => {
   });
 
   it('syncs the action mode on a URL change but skips the badge when the count is off', () => {
-    setSettings({ showImageCount: false });
+    setSettings({ automaticBadgeScanning: false });
 
     onUpdated(9, { url: 'https://example.com/next' }, { url: 'https://example.com/next' });
 
@@ -422,7 +456,7 @@ describe('background tab lifecycle listeners', () => {
   });
 
   it('does nothing for a background-tab update that is neither complete, loading, nor a URL change (count off)', () => {
-    setSettings({ showImageCount: false });
+    setSettings({ automaticBadgeScanning: false });
 
     onUpdated(10, { audible: true }, { url: 'https://example.com' });
 

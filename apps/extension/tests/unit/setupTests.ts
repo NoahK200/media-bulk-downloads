@@ -125,6 +125,12 @@ global.chrome = {
             removeListener: vi.fn(),
         },
     },
+    scripting: {
+        executeScript: vi.fn().mockResolvedValue([]),
+        registerContentScripts: vi.fn().mockResolvedValue(undefined),
+        unregisterContentScripts: vi.fn().mockResolvedValue(undefined),
+        getRegisteredContentScripts: vi.fn().mockResolvedValue([]),
+    },
     offscreen: {
         Reason: { BLOBS: 'BLOBS' },
         hasDocument: vi.fn().mockResolvedValue(false),

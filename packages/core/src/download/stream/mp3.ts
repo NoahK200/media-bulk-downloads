@@ -41,7 +41,7 @@ export const isMp3Format = (format: AudioFormat): boolean => mp3BitrateFor(forma
 /**
  * Upper bound on the extracted-audio byte size the offscreen host will decode →
  * MP3. `decodeAudioData` inflates compressed AAC to Float32 PCM (~10×), so an
- * extreme audio-only capture approaching the 1 GB stream cap would balloon to
+ * extreme audio-only capture approaching the 256 MiB memory cap would balloon to
  * multiple GB of PCM and OOM-crash the offscreen document (an OOM is not reliably
  * catchable). Above this ceiling the transcode is refused up front, surfacing the
  * normal `mp3_transcode_failed` code instead of a crash. Generous — a typical

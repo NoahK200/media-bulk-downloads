@@ -1,6 +1,6 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { extractFbMedia, FbMediaEntry } from '@mbd/core/resolvers/sniffers/fb-media-sniff';
-import { installResponseSniffer, makeSnifferEmit, installReplayOnReady } from '@mbd/core/resolvers/sniffers/response-sniffer';
+import { installResponseSniffer, makeSnifferEmit, installReplayOnReady, isObservationActive, onObservationStop } from '@mbd/core/resolvers/sniffers/response-sniffer';
 
 /**
  * MAIN-world content script for facebook.com. Runs at document_start so it wraps
@@ -11,11 +11,13 @@ import { installResponseSniffer, makeSnifferEmit, installReplayOnReady } from '@
  * the postMessage bridge; the fetch/XHR wiring is shared with the IG/X sniffers.
  */
 export default defineContentScript({
+  registration: 'runtime',
   matches: ['*://*.facebook.com/*'],
   runAt: 'document_start',
   world: 'MAIN',
   main() {
     const buffer: FbMediaEntry[] = [];
+    onObservationStop(() => buffer.splice(0));
     let relayReady = false;
     installResponseSniffer({
       urlKey: '__mbdFbUrl',
@@ -37,7 +39,7 @@ export default defineContentScript({
     });
     installReplayOnReady('mbd-fb-ready', () => {
       relayReady = true;
-      if (buffer.length) window.postMessage({ source: 'mbd-fb-media', entries: buffer.splice(0) }, location.origin);
+      if (isObservationActive() && buffer.length) window.postMessage({ source: 'mbd-fb-media', entries: buffer.splice(0) }, location.origin);
     });
   },
 });

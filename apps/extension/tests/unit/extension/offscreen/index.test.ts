@@ -54,11 +54,11 @@ describe('offscreen capture host', () => {
     expect(ret).toBe(true);
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(captureHls).toHaveBeenCalledWith('https://x/m.m3u8', expect.anything(), { quality: 720, maxBytes: 1000, audioOnly: false });
+    expect(captureHls).toHaveBeenCalledWith('https://x/m.m3u8', expect.anything(), expect.objectContaining({ quality: 720, maxBytes: 1000, audioOnly: false }));
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'CAPTURE_PROGRESS', runId: 'run-1', done: 3, total: 7 });
-    expect(sendResponse).toHaveBeenCalledWith({
+    expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({
       ok: true, blobUrl: 'blob:test', ext: 'mp4', segmentCount: 5, muxedAudio: true,
-    });
+    }));
   });
 
   it('threads audioOnly through to the engine (#204)', async () => {
@@ -66,7 +66,7 @@ describe('offscreen capture host', () => {
     const sendResponse = vi.fn();
     getListener()({ type: 'CAPTURE_RUN', runId: 'run-1', engine: 'hls', manifestUrl: 'https://x/m.m3u8', quality: 720, maxBytes: 1000, audioOnly: true }, {}, sendResponse);
     await new Promise((r) => setTimeout(r, 0));
-    expect(captureHls).toHaveBeenCalledWith('https://x/m.m3u8', expect.anything(), { quality: 720, maxBytes: 1000, audioOnly: true });
+    expect(captureHls).toHaveBeenCalledWith('https://x/m.m3u8', expect.anything(), expect.objectContaining({ quality: 720, maxBytes: 1000, audioOnly: true }));
     expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({ ok: true, ext: 'm4a' }));
   });
 

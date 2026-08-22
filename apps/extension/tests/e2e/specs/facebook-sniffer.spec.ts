@@ -6,7 +6,7 @@ const PORT = Number(process.env.E2E_PORT) || 5199;
 const FB_ORIGIN = 'https://www.facebook.com';
 
 const figureWithSrc = (page: Page, part: string) =>
-  page.locator('figure', { has: page.locator(`img[src*="${part}"]`) });
+  page.locator(`figure[data-media-src*="${part}"]`);
 
 const PHOTOS_NDJSON =
   '{"data":{"viewer":{"news_feed":{"edges":[{"node":{"id":"301","viewer_image":{"uri":"https://scontent-a.xx.fbcdn.net/v/t39.30808-6/FBG_301_orig_n.jpg?oh=00_OA&oe=7A","width":2048,"height":1365}}}]}}}}\n' +
@@ -14,6 +14,25 @@ const PHOTOS_NDJSON =
 
 const REEL_NDJSON =
   '{"data":{"node":{"id":"401","__typename":"Video","progressive_url":"https://scontent-c.xx.fbcdn.net/o1/v/t2/f2/FBR_401_prog.mp4?oh=00_PA&oe=7C","preferred_thumbnail":{"image":{"uri":"https://scontent-c.xx.fbcdn.net/v/t39.30808-6/FBR_401_cover_n.jpg?oh=00_CA&oe=6C","width":640,"height":360}}}}}';
+
+async function enableFbRuntime(context: BrowserContext) {
+  const worker = await serviceWorker(context);
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ settings: { bubbleEnabled: true } });
+    await chrome.storage.local.set({ privacyPreferences: {
+      version: 1,
+      reviewComplete: true,
+      automaticBadgeScanning: false,
+      observeMediaRequests: true,
+      sankakuSessionResolution: false,
+    } });
+  });
+  await expect.poll(() => worker.evaluate(async () =>
+    (await chrome.scripting.getRegisteredContentScripts()).map((script) => script.id))).toEqual(
+      expect.arrayContaining(['mbd-bubble', 'mbd-sniffer-relay', 'mbd-fb-sniffer']),
+    );
+  return worker;
+}
 
 /**
  * Route the fake facebook.com origin so the browser's own `location.hostname`
@@ -23,10 +42,7 @@ const REEL_NDJSON =
  * uses and the sniffer must now accept.
  */
 async function openFbSniffer(context: BrowserContext, htmlFile: string, ndjson: string): Promise<Page> {
-  const worker = await serviceWorker(context);
-  await worker.evaluate(
-    () => new Promise<void>((resolve) => chrome.storage.sync.set({ settings: { bubbleEnabled: true } }, () => resolve())),
-  );
+  await enableFbRuntime(context);
   const page = await context.newPage();
   await page.route(`${FB_ORIGIN}/**`, async (route) => {
     const url = new URL(route.request().url());
@@ -63,10 +79,7 @@ test.describe('facebook sniffer (text/html NDJSON graphql)', () => {
   });
 
   test('a grid tile collected before its original is sniffed upgrades in place (no duplicate)', async ({ context }) => {
-    const worker = await serviceWorker(context);
-    await worker.evaluate(
-      () => new Promise<void>((resolve) => chrome.storage.sync.set({ settings: { bubbleEnabled: true } }, () => resolve())),
-    );
+    await enableFbRuntime(context);
     const page = await context.newPage();
     let releaseGraphql: () => void = () => {};
     const gate = new Promise<void>((r) => { releaseGraphql = r; });
@@ -102,7 +115,7 @@ test.describe('facebook sniffer (text/html NDJSON graphql)', () => {
     await openPanel(page);
     await page.getByRole('button', { name: 'Deep scan' }).click();
 
-    await expect(figureWithSrc(page, 'FBR_401_cover_n')).toHaveCount(1);
+    await expect(figureWithSrc(page, 'FBR_401_prog.mp4')).toHaveCount(1);
     await expect(page.getByText('MP4', { exact: false }).first()).toBeVisible();
   });
 });

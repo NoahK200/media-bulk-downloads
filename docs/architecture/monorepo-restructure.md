@@ -115,7 +115,8 @@ package is independently testable.
    contracts (anchor-blob `Downloader`, no-op `Notifier`/`HeaderRules`, page-context
    `StreamCaptureHost`), and `apps/safari-native/` wraps `.output/safari-mv3` (submitted to the Mac
    App Store, under review). The planned `safari/*` directory landed as a single `safari.ts` module.
-2. **Wire the capability seam** — the background currently calls `chrome.*` directly; route it
-   through the `@mbd/platform` interfaces + `selectPlatform()` so degraded targets fall back cleanly.
+2. ~~**Wire the capability seam**~~ — **done**: downloads, notifications,
+   header rules, and capture hosts route through `selectPlatform()`; app-owned
+   tab/runtime messaging remains outside the seam.
 3. **Dependency hygiene** — the app under-declares nothing critical, but a pass to confirm each
    package declares exactly what it imports would harden independent builds.

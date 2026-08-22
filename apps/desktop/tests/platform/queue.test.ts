@@ -51,3 +51,19 @@ Deno.test('queue reads settings live from the getter, not a snapshot at construc
 
   store.close();
 });
+
+Deno.test('queue preserves history for 100 concurrent completions', async () => {
+  const store = await openStore(await Deno.makeTempFile({ suffix: '.kv' }));
+  const q = createQueue({
+    store,
+    root: '/out',
+    settings: () => ({ downloadPath: '', namingMode: 'prefixed', fileNamePrefix: 'image_', downloadConcurrency: 10 }),
+    downloadImpl: ((item: { src: string }) => Promise.resolve({ path: `/out/${item.src.split('/').pop()}` })) as never,
+    backoffMs: () => 0,
+  });
+  await q.enqueue(Array.from({ length: 100 }, (_, index) => ({ src: `https://x/${index}.jpg` })));
+  await q.drain();
+  assertEquals(q.status().done, 100);
+  assertEquals((await loadHistory(store)).length, 100);
+  store.close();
+});

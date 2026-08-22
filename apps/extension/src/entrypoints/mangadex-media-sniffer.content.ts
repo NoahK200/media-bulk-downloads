@@ -5,7 +5,7 @@ import {
   MangadexMediaEntry,
   MANGADEX_MATCHES,
 } from '@mbd/core/resolvers/sniffers/mangadex-media-sniff';
-import { installResponseSniffer, installReplayOnReady } from '@mbd/core/resolvers/sniffers/response-sniffer';
+import { installResponseSniffer, installReplayOnReady, isObservationActive, onObservationStop } from '@mbd/core/resolvers/sniffers/response-sniffer';
 
 /**
  * MAIN-world content script for MangaDex. Runs in the page realm at
@@ -19,11 +19,13 @@ import { installResponseSniffer, installReplayOnReady } from '@mbd/core/resolver
  * buffered and replayed when the relay announces `mbd-mangadex-ready`.
  */
 export default defineContentScript({
+  registration: 'runtime',
   matches: MANGADEX_MATCHES,
   runAt: 'document_start',
   world: 'MAIN',
   main() {
     const buffer: MangadexMediaEntry[] = [];
+    onObservationStop(() => buffer.splice(0));
     let relayReady = false;
 
     const emit = (text: string, url: string): void => {
@@ -37,7 +39,7 @@ export default defineContentScript({
           for (const e of entries) buffer.push(e);
           if (buffer.length > 8000) buffer.splice(0, buffer.length - 8000);
         }
-        window.postMessage({ source: 'mbd-mangadex-media', entries }, location.origin);
+        if (isObservationActive()) window.postMessage({ source: 'mbd-mangadex-media', entries }, location.origin);
       } catch {
         /* not JSON / not ours — ignore, never disturb the page */
       }
@@ -50,7 +52,7 @@ export default defineContentScript({
     });
     installReplayOnReady('mbd-mangadex-ready', () => {
       relayReady = true;
-      if (buffer.length) window.postMessage({ source: 'mbd-mangadex-media', entries: buffer.splice(0) }, location.origin);
+      if (isObservationActive() && buffer.length) window.postMessage({ source: 'mbd-mangadex-media', entries: buffer.splice(0) }, location.origin);
     });
   },
 });

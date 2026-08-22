@@ -3,8 +3,10 @@ title: "Badge"
 description: "The per-tab media count on the toolbar icon — its eligibility filters, loading behavior, and popup-vs-bubble click modes."
 ---
 
-The toolbar icon shows the count of **eligible** media on the active tab. The service worker keeps it in sync. It only draws the count when the **Show image count on toolbar icon** setting is on (`showImageCount`,
-default on).
+The toolbar icon shows the count of **eligible** media on the active tab only
+after the local-only **Automatic media-count scanning** privacy control is
+enabled (`automaticBadgeScanning`, default off). A fresh install registers no
+collector and performs no automatic page scan.
 
 ## Flow
 
@@ -16,9 +18,10 @@ sequenceDiagram
   participant CS as Content script
   participant F as eligibility filters
 
-  Note over CH,SW: tab activated or finished loading (Show image count on toolbar icon must be on)
+  Note over CH,SW: tab activated or finished loading (local badge-scan consent must be on)
   CH->>SW: tabs.onActivated / tabs.onUpdated(status:"complete")
-  SW->>CS: sendMessage("GET_IMAGES")
+  SW->>CS: runtime inject collector if needed
+  SW->>CS: sendMessage({type:"GET_IMAGES", allowNetwork:false})
   CS-->>SW: ImageInfo[]
   SW->>F: filterImagesBySettings, then drop blocklisted (filterExcluded)
   F-->>SW: eligible count
@@ -46,7 +49,10 @@ settings and blocklist caches to load, so a cold-started worker doesn't over-cou
 - **Loading** tabs show `...` until the tab finishes loading, then the real count.
 - If the content script can't run — `chrome://`, `about:`, the Chrome Web Store, AMO — the `GET_IMAGES` call returns a `lastError`. The worker clears that tab's badge, so a stale `...` placeholder
   doesn't stay stuck on it.
-- When **Show image count on toolbar icon** is off, existing badges are cleared and no counts are drawn. The activation and load listeners skip the badge entirely.
+- When **Automatic media-count scanning** is off, the runtime collector registration
+  is removed, existing badges are cleared, and activation/load listeners skip the
+  badge entirely. Badge scans use `allowNetwork:false`, so they never invoke
+  Shopify enrichment or a resolver network tier.
 
 ## Popup vs. bubble mode
 
@@ -67,9 +73,9 @@ flowchart LR
 `chrome.google.com/webstore`, and `addons.mozilla.org`. So even with the bubble enabled, those pages (and any `chrome://`, `about:`, etc. page) fall back to the popup. The popup is the only surface
 that works everywhere.
 
-This mode switch is independent of the badge count — it runs whether or not **Show image count on toolbar icon** is on.
+This mode switch is independent of the badge count — it runs whether or not
+**Automatic media-count scanning** is enabled.
 
 See [In-page Bubble](/media-bulk-downloads/guides/bubble/) for what `TOGGLE_BUBBLE` does.
 
 ---
-

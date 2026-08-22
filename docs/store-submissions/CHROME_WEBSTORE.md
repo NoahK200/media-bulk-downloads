@@ -14,7 +14,7 @@ Version at time of writing: **1.3.0** · Manifest **V3**.
 
 - [ ] One-time **$5 developer registration** paid on the [Developer Dashboard](https://chrome.google.com/webstore/devconsole).
 - [ ] `wxt.config.ts` name/description correct; version comes from `apps/extension/package.json`. `yarn build` emits `apps/extension/.output/chrome-mv3/manifest.json`.
-- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `tabs`, `contextMenus`, `offscreen`, host `<all_urls>`.
+- [ ] Permissions match what ships: `downloads`, `downloads.open`, `storage`, `scripting`, `tabs`, `contextMenus`, `offscreen`, host `<all_urls>`.
 - [ ] `minimum_chrome_version: 109` is set in the Chrome/Edge manifest (the `chrome.offscreen` floor for HLS/DASH capture); the Firefox manifest omits it and pins `gecko.strict_min_version` instead.
 - [ ] Optional permissions declared: `notifications` and `declarativeNetRequestWithHostAccess` (both requested at runtime, not at install — see §4).
 - [ ] `commands` (keyboard shortcuts) and the MAIN-world content scripts (page + Instagram/X/Facebook/Pinterest/MangaDex media sniffers plus the all-URLs HLS sniffer) are present — no extra permission needed, but note them for review (see §4).
@@ -115,7 +115,7 @@ FASTER TO REACH
 • Back up and restore your settings, favourites, and history as a JSON file
 
 PRIVATE BY DESIGN
-• Network-free by default: it only reads what the page already loaded
+• Network- and observation-free by default: it only reads what the page already loaded
 • No accounts, no analytics, no servers — everything runs locally in your browser
 • Your settings and history never leave your device
 

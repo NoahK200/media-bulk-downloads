@@ -1,4 +1,5 @@
 import { get, set, del, createStore } from 'idb-keyval';
+import type { PersistenceResult } from '@mbd/core/types';
 
 const store = createStore('media-bulk-downloads', 'kv');
 
@@ -20,13 +21,22 @@ export const idbDelete = (key: string): Promise<void> => del(key, store);
  * swallowing it lets an upper layer surface a "not saved — storage full" warning
  * rather than silently losing the user's action on the next service-worker restart.
  */
-export function durableSet(key: string, value: unknown): Promise<boolean> {
+function failureCode(error: unknown): Exclude<PersistenceResult, { ok: true }>['code'] {
+  const name = error instanceof DOMException ? error.name : '';
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (name === 'QuotaExceededError' || /quota/i.test(message)) return 'quota';
+  if (name === 'InvalidStateError' || /unavailable|disabled|not available/i.test(message)) return 'unavailable';
+  return 'unknown';
+}
+
+export function durableSet(key: string, value: unknown): Promise<PersistenceResult> {
   const local = chrome.storage.local
     .set({ [key]: value })
-    .then(() => true)
+    .then(() => ({ ok: true }) as const)
     .catch((e) => {
-      console.error('[storage] chrome.storage.local write failed (quota?)', key, e);
-      return false;
+      // Do not log the value: queue/history URLs may carry signed query secrets.
+      console.error('[storage] chrome.storage.local write failed', key, e instanceof Error ? e.name : 'unknown');
+      return { ok: false, code: failureCode(e) } as const;
     });
   void idbSet(key, value).catch((e) => console.warn('[storage] IDB mirror write failed', key, e));
   return local;

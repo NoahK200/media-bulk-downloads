@@ -24,7 +24,7 @@ const loadContent = async (): Promise<{ messageHandlers: Handler[]; postSpy: Moc
   sendMessage.mockReset();
   sendMessage.mockReturnValue(Promise.resolve(undefined));
 
-  await import('@/extension/content');
+  await import('@/extension/content/sniffer-relay');
   sendMessage.mockClear();
 
   const messageHandlers = addSpy.mock.calls
@@ -60,7 +60,7 @@ describe('X media relay (x.com)', () => {
   });
 
   it('wires both the X and HLS relays on x.com', async () => {
-    expect((await loadContent()).messageHandlers).toHaveLength(2);
+    expect((await loadContent()).messageHandlers).toHaveLength(3);
   });
 
   it('ignores a foreign window source', async () => {

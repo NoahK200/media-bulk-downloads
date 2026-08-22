@@ -29,7 +29,7 @@ beforeAll(async () => {
     },
   );
 
-  await import('@/extension/content');
+  await import('@/extension/content/bubble-controller');
   await flush();
   mountedOnLoad = (mountBubble as Mock).mock.calls.length;
 

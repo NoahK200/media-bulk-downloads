@@ -1,6 +1,9 @@
 import { BackupData, ExcludedEntry, FavouriteEntry, HistoryEntry, SettingsData } from '@mbd/core/types';
-import { withDefaults } from '@mbd/storage/settings';
+import { sanitizeSettings } from '@mbd/storage/settings';
 import { stripUrlSecrets } from '@mbd/core/net/url-secrets';
+import { FAVOURITES_CAP, mergeFavourites } from '@mbd/core/collection/entry-merge';
+import { HISTORY_CAP, mergeHistory } from '@mbd/core/collection/entry-merge';
+import { EXCLUDED_CAP, mergeExcluded } from '@mbd/storage/excluded';
 
 /**
  * Import / export of the user's data (settings + favourites + history) as one
@@ -11,11 +14,14 @@ import { stripUrlSecrets } from '@mbd/core/net/url-secrets';
  */
 
 export const BACKUP_APP = 'media-bulk-downloads';
-export const BACKUP_VERSION = 1;
+export const BACKUP_VERSION = 2;
+export const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 
 /** Whether a value looks like a stored media entry (favourite or history). */
 function hasStringSrc(entry: unknown): entry is { src: string } {
-  return !!entry && typeof entry === 'object' && typeof (entry as { src?: unknown }).src === 'string';
+  if (!entry || typeof entry !== 'object' || typeof (entry as { src?: unknown }).src !== 'string') return false;
+  const src = (entry as { src: string }).src;
+  return /^https?:\/\//i.test(src) || /^data:image\//i.test(src);
 }
 
 /**
@@ -77,6 +83,7 @@ function normalizeEntry<T extends { time?: unknown; sourcePageUrl?: unknown }>(e
  * (settings run through `withDefaults`, entries filtered to those with a `src`).
  */
 export function parseBackup(json: string): BackupData | null {
+  if (new TextEncoder().encode(json).byteLength > MAX_BACKUP_BYTES) return null;
   let raw: unknown;
   try {
     raw = JSON.parse(json);
@@ -87,24 +94,30 @@ export function parseBackup(json: string): BackupData | null {
   const obj = raw as Partial<BackupData>;
   if (obj.app !== BACKUP_APP) return null;
 
+  const { settings, repairs } = sanitizeSettings(obj.settings ?? {});
+  const favourites = Array.isArray(obj.favourites)
+    ? mergeFavourites([], obj.favourites.filter(hasStringSrc).map(normalizeEntry) as FavouriteEntry[]).slice(0, FAVOURITES_CAP)
+    : [];
+  const history = Array.isArray(obj.history)
+    ? mergeHistory([], obj.history.filter(hasStringSrc).map(normalizeEntry) as HistoryEntry[]).slice(0, HISTORY_CAP)
+    : [];
+  const excluded = Array.isArray(obj.excluded)
+    ? mergeExcluded([], obj.excluded
+        .filter((e): e is ExcludedEntry =>
+          !!e && typeof e === 'object' &&
+          typeof (e as ExcludedEntry).value === 'string' &&
+          ((e as ExcludedEntry).kind === 'url' || (e as ExcludedEntry).kind === 'host'))
+        .map((e) => ({ ...e, time: Number(e.time) || 0 })) as ExcludedEntry[]).slice(0, EXCLUDED_CAP)
+    : [];
+
   return {
     app: BACKUP_APP,
     version: typeof obj.version === 'number' ? obj.version : 0,
     exportedAt: typeof obj.exportedAt === 'string' ? obj.exportedAt : '',
-    settings: withDefaults((obj.settings ?? {}) as Partial<SettingsData>),
-    favourites: Array.isArray(obj.favourites)
-      ? (obj.favourites.filter(hasStringSrc).map(normalizeEntry) as FavouriteEntry[])
-      : [],
-    history: Array.isArray(obj.history)
-      ? (obj.history.filter(hasStringSrc).map(normalizeEntry) as HistoryEntry[])
-      : [],
-    excluded: Array.isArray(obj.excluded)
-      ? (obj.excluded
-          .filter((e): e is ExcludedEntry =>
-            !!e && typeof e === 'object' &&
-            typeof (e as ExcludedEntry).value === 'string' &&
-            ((e as ExcludedEntry).kind === 'url' || (e as ExcludedEntry).kind === 'host'))
-          .map((e) => ({ ...e, time: Number(e.time) || 0 })) as ExcludedEntry[])
-      : [],
+    settings,
+    favourites,
+    history,
+    excluded,
+    ...(repairs.length ? { repairs } : {}),
   };
 }

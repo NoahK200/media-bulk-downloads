@@ -1,4 +1,4 @@
-import { ExcludedEntry, ExcludedKind } from '@mbd/core/types';
+import { ExcludedEntry, ExcludedKind, PersistenceResult } from '@mbd/core/types';
 import { canonicalSrcKey, SrcKeySet } from '@mbd/core/collection/canonical';
 import { registrableDomain } from '@mbd/core/collection/paths';
 import { durableSet } from '@mbd/storage/idb';
@@ -38,7 +38,7 @@ export async function loadExcluded(): Promise<ExcludedEntry[]> {
   return raw
     .filter((e): e is ExcludedEntry =>
       !!e && typeof e === 'object' &&
-      typeof (e as ExcludedEntry).value === 'string' &&
+      typeof (e as ExcludedEntry).value === 'string' && (e as ExcludedEntry).value.length <= 16_384 &&
       ((e as ExcludedEntry).kind === 'url' || (e as ExcludedEntry).kind === 'host'))
     .map((e) => ({ value: (e as ExcludedEntry).value, kind: (e as ExcludedEntry).kind, time: Number((e as ExcludedEntry).time) || 0 }));
 }
@@ -51,31 +51,31 @@ function serialize<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /** Resolves to whether the write persisted (see durableSet). */
-export async function addExcluded(entry: ExcludedEntry): Promise<boolean> {
+export async function addExcluded(entry: ExcludedEntry): Promise<PersistenceResult> {
   return serialize(async () => {
     const merged = mergeExcluded(await loadExcluded(), [entry]);
     return durableSet(EXCLUDED_KEY, merged);
   });
 }
 
-export async function removeExcluded(kind: ExcludedKind, value: string): Promise<void> {
+export async function removeExcluded(kind: ExcludedKind, value: string): Promise<PersistenceResult> {
   return serialize(async () => {
     const next = (await loadExcluded()).filter(
       (e) => !(e.kind === kind && (kind === 'url' ? canonicalSrcKey(e.value) === canonicalSrcKey(value) : e.value === value)),
     );
-    await durableSet(EXCLUDED_KEY, next);
+    return durableSet(EXCLUDED_KEY, next);
   });
 }
 
-export async function restoreExcluded(entries: ExcludedEntry[]): Promise<void> {
+export async function restoreExcluded(entries: ExcludedEntry[]): Promise<PersistenceResult> {
   return serialize(async () => {
-    await durableSet(EXCLUDED_KEY, mergeExcluded([], entries));
+    return durableSet(EXCLUDED_KEY, mergeExcluded([], entries));
   });
 }
 
-export async function clearExcluded(): Promise<void> {
+export async function clearExcluded(): Promise<PersistenceResult> {
   return serialize(async () => {
-    await durableSet(EXCLUDED_KEY, []);
+    return durableSet(EXCLUDED_KEY, []);
   });
 }
 

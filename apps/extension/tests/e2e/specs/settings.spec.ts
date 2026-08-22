@@ -43,7 +43,6 @@ test.describe('settings panel (draft + Save)', () => {
       [/resolve exact originals/i, 'resolveOriginals', undefined],
       [/capture video streams/i, 'captureHlsStreams', undefined],
       [/click .*load more/i, 'deepScanClickLoadMore', () => openAdvanced(page)],
-      [/show image count/i, 'showImageCount', () => selectTab(page, /Display/i)],
     ];
     const initial: Record<string, boolean> = {};
     for (const [name, key, nav] of switches) {

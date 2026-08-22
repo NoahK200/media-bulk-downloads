@@ -8,10 +8,10 @@ describe('chromeDownloader', () => {
     expect(chrome.downloads.cancel).toHaveBeenCalledWith(42, expect.any(Function));
   });
 
-  it('download() resolves to the id, or undefined on lastError', async () => {
+  it('download() resolves to a tracked result', async () => {
     (chrome.downloads.download as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (_req: unknown, cb: (id?: number) => void) => cb(7),
     );
-    expect(await chromeDownloader.download({ url: 'https://x/y.jpg', filename: 'y.jpg' })).toBe(7);
+    expect(await chromeDownloader.download({ url: 'https://x/y.jpg', filename: 'y.jpg' })).toEqual({ kind: 'tracked', id: 7 });
   });
 });

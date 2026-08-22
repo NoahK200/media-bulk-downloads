@@ -13,6 +13,8 @@ export async function openBubblePage(
   extraSettings: Record<string, unknown> = {},
 ): Promise<Page> {
   const worker = await serviceWorker(context);
+  await expect.poll(() => worker.evaluate(() =>
+    (globalThis as typeof globalThis & { __mbdBackgroundReady?: boolean }).__mbdBackgroundReady === true)).toBe(true);
   await worker.evaluate(
     (extra) =>
       new Promise<void>((resolve) => {
@@ -20,6 +22,8 @@ export async function openBubblePage(
       }),
     extraSettings,
   );
+  await expect.poll(() => worker.evaluate(async () =>
+    (await chrome.scripting.getRegisteredContentScripts()).map((script) => script.id))).toContain('mbd-bubble');
   const page = await context.newPage();
   await page.goto(url);
   await page.getByRole('button', { name: 'Media Bulk Downloads' }).waitFor();

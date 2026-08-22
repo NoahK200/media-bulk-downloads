@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { ExcludedEntry } from '@mbd/core/types';
 import { loadExcluded, EXCLUDED_KEY } from '@mbd/storage/excluded';
-import { sendRuntimeMessage } from '@/extension/popup/utils';
+import { sendMutationMessage } from '@/extension/popup/utils';
 import { useDialog } from '@/extension/popup/hooks/useDialog';
 import { ClearAllButton } from '@/extension/popup/components/fields/ClearAllButton';
 
@@ -24,6 +24,7 @@ const displayName = (src: string): string => {
 
 const ExcludedPanel: React.FC<ExcludedPanelProps> = ({ onClose }) => {
   const [entries, setEntries] = useState<ExcludedEntry[]>([]);
+  const [error, setError] = useState('');
   const panelRef = useDialog(onClose);
 
   useEffect(() => {
@@ -40,13 +41,17 @@ const ExcludedPanel: React.FC<ExcludedPanelProps> = ({ onClose }) => {
   const sorted = [...entries].sort((a, b) => b.time - a.time);
 
   const handleRemove = (entry: ExcludedEntry) => {
-    sendRuntimeMessage({ type: 'REMOVE_EXCLUDED', kind: entry.kind, value: entry.value });
-    setEntries((prev) => prev.filter((e) => !(e.kind === entry.kind && e.value === entry.value)));
+    void sendMutationMessage({ type: 'REMOVE_EXCLUDED', kind: entry.kind, value: entry.value }).then((response) => {
+      if (response.status === 'error') { setError(response.message); return; }
+      setEntries((prev) => prev.filter((e) => !(e.kind === entry.kind && e.value === entry.value)));
+    });
   };
 
   const handleClearAll = () => {
-    sendRuntimeMessage({ type: 'CLEAR_EXCLUDED' });
-    setEntries([]);
+    void sendMutationMessage({ type: 'CLEAR_EXCLUDED' }).then((response) => {
+      if (response.status === 'error') { setError(response.message); return; }
+      setEntries([]);
+    });
   };
 
   return (
@@ -74,6 +79,7 @@ const ExcludedPanel: React.FC<ExcludedPanelProps> = ({ onClose }) => {
         </header>
 
         <div className="scroll-thin mbd:flex-1 mbd:space-y-2 mbd:overflow-y-auto mbd:px-4 mbd:py-4">
+          {error && <p role="alert" className="mbd:text-[11px] mbd:text-(--danger)">{error}</p>}
           {sorted.length === 0 ? (
             <p className="mbd:py-8 mbd:text-center mbd:text-[12px] mbd:text-(--ink-2)">No excluded sources.</p>
           ) : (

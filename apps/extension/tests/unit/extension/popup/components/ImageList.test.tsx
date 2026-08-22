@@ -237,6 +237,29 @@ describe('ImageList Component', () => {
       );
       expect(screen.queryByRole('button', { name: /add favourite/i })).not.toBeInTheDocument();
     });
+
+    it('explains disabled Sankaku session access and links directly to Privacy', async () => {
+      const onFetchVideo = vi.fn();
+      const onOpenPrivacy = vi.fn();
+      const sankaku = {
+        ...pendingVideo,
+        resolveHint: { platform: 'sankaku' as const, id: 'post-1' },
+      };
+      render(
+        <ImageList
+          images={[sankaku]}
+          onImageDownload={vi.fn()}
+          onFetchVideo={onFetchVideo}
+          sankakuSessionEnabled={false}
+          onOpenPrivacy={onOpenPrivacy}
+        />,
+      );
+      await userEvent.click(screen.getByTitle('View Details'));
+      expect(screen.getByText(/Session access disabled/i)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /review privacy settings/i }));
+      expect(onOpenPrivacy).toHaveBeenCalledOnce();
+      expect(onFetchVideo).not.toHaveBeenCalled();
+    });
   });
 
   describe('ImageList pending images', () => {

@@ -104,6 +104,21 @@ describe('App Component', () => {
     await screen.findByText('No media here');
   });
 
+  it('constrains and wraps the collection toolbar so its action buttons cannot overflow', async () => {
+    render(<App surface="bubble" collect={async () => [image({ src: 'visible.jpg' })]} />);
+    const scope = await screen.findByRole('combobox', { name: 'Collection scope' });
+    expect(scope).toHaveStyle({ width: '140px', height: '30px' });
+    expect(scope).toHaveClass('mbd:min-w-0', 'mbd:max-w-full', 'mbd:shrink');
+
+    const actions = scope.closest('.collection-toolbar-actions');
+    const toolbar = scope.closest('.collection-toolbar');
+    expect(actions).toHaveClass('mbd:flex-wrap', 'mbd:max-w-full', 'mbd:justify-end');
+    expect(toolbar).toHaveClass('mbd:flex-wrap', 'mbd:gap-y-2');
+    expect(await screen.findByRole('button', { name: 'Deep scan' })).toHaveClass('mbd:shrink-0');
+    expect(screen.getByRole('button', { name: 'Find near-duplicates' })).toHaveClass('mbd:shrink-0');
+    expect(screen.getByRole('button', { name: 'Rescan page' })).toHaveClass('mbd:shrink-0');
+  });
+
   it('uses the injected multi-tab collector for All tabs and reports progress', async () => {
     const collect = vi.fn(async () => [image({ src: 'active.jpg' })]);
     const collectTabs = vi.fn(async (options?: MultiTabCollectionOptions) => {

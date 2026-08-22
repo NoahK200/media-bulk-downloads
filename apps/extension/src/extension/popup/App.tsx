@@ -333,8 +333,8 @@ const App: React.FC<AppProps> = ({
           </div>
         </div>
 
-        <div className="mbd:flex mbd:items-end mbd:justify-between mbd:px-4 mbd:pb-3.5 mbd:pt-3">
-          <div className="mbd:flex mbd:items-baseline mbd:gap-2">
+        <div className="collection-toolbar mbd:flex mbd:flex-wrap mbd:items-end mbd:justify-between mbd:gap-x-3 mbd:gap-y-2 mbd:px-4 mbd:pb-3.5 mbd:pt-3">
+          <div className="mbd:flex mbd:min-w-0 mbd:items-baseline mbd:gap-2">
             <span className="num mbd:text-[30px] mbd:font-semibold mbd:leading-none mbd:text-(--ink)">
               {state.isLoading ? '—' : total}
             </span>
@@ -350,7 +350,7 @@ const App: React.FC<AppProps> = ({
                   : 'items on this page'}
             </span>
           </div>
-          <div className="mbd:flex mbd:items-center mbd:gap-1.5">
+          <div className="collection-toolbar-actions mbd:flex mbd:min-w-0 mbd:max-w-full mbd:flex-wrap mbd:items-center mbd:justify-end mbd:gap-1.5">
             <select
               aria-label="Collection scope"
               title="Which tabs to collect from"
@@ -360,8 +360,8 @@ const App: React.FC<AppProps> = ({
                 if (next === 'selected') { setShowTabPicker(true); return; }
                 changeScope(next);
               }}
-              className="field mbd:shrink-0 mbd:py-0 mbd:text-[12px]"
-              style={{ height: 30 }}
+              className="field collection-scope-select mbd:min-w-0 mbd:max-w-full mbd:shrink mbd:py-0 mbd:text-[12px]"
+              style={{ height: 30, width: 140 }}
               disabled={state.isLoading}
             >
               <option value="active">This tab</option>
@@ -369,18 +369,18 @@ const App: React.FC<AppProps> = ({
               <option value="selected">{selectedTabIds.length > 0 ? `Selected (${selectedTabIds.length})` : 'Selected tabs…'}</option>
             </select>
             {deepScanning && (
-              <span className="num mbd:inline-flex mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
+              <span className="num mbd:inline-flex mbd:shrink-0 mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
                 {deepProgress?.found ?? 0} found
               </span>
             )}
             {nearDup.running && nearDup.progress && (
-              <span className="num mbd:inline-flex mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
+              <span className="num mbd:inline-flex mbd:shrink-0 mbd:items-center mbd:rounded-full mbd:bg-(--brand-soft) mbd:px-2 mbd:py-0.5 mbd:text-[10px] mbd:font-semibold mbd:text-(--brand-ink)">
                 {nearDup.progress.done}/{nearDup.progress.total} hashing
               </span>
             )}
             <button
               onClick={handleDeepScan}
-              className="iconbtn"
+              className="iconbtn mbd:shrink-0"
               title={deepScanning ? 'Stop deep scan' : 'Deep scan (scroll to load more)'}
               aria-label={deepScanning ? 'Stop deep scan' : 'Deep scan'}
             >
@@ -391,14 +391,14 @@ const App: React.FC<AppProps> = ({
             {hasImages && !state.isLoading && (
               <button
                 onClick={() => (nearDup.running ? nearDup.cancel() : void nearDup.run())}
-                className="iconbtn"
+                className="iconbtn mbd:shrink-0"
                 title={nearDup.running ? 'Stop near-duplicate scan' : 'Find near-duplicates (fetches & hashes images)'}
                 aria-label={nearDup.running ? 'Stop near-duplicate scan' : 'Find near-duplicates'}
               >
                 <Square2StackIcon className={`mbd:h-4.5 mbd:w-4.5 ${nearDup.running ? 'mbd:animate-pulse' : ''}`} />
               </button>
             )}
-            <button onClick={() => { setStreamRefusal(null); fetchImages(); }} className="iconbtn" title="Rescan page" aria-label="Rescan page">
+            <button onClick={() => { setStreamRefusal(null); fetchImages(); }} className="iconbtn mbd:shrink-0" title="Rescan page" aria-label="Rescan page">
               <ArrowPathIcon className={`mbd:h-4.5 mbd:w-4.5 ${state.isLoading ? 'mbd:animate-[spin_0.9s_linear_infinite]' : ''}`} />
             </button>
           </div>

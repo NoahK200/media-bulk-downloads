@@ -65,6 +65,10 @@ export interface ImageInfo {
    *  Drives per-item `{host}`/`{domain}` download tokens and the grid's source
    *  tooltip. Absent for single active-tab collection (that path is unchanged). */
   sourcePage?: { url: string; title?: string };
+  /** Epoch ms at which `src`'s CDN signature stops being honoured, read by
+   *  `readUrlLease` at collection time. Absent for the overwhelmingly common
+   *  unsigned URL; a lapsed value means the URL is permanently dead. */
+  expiresAt?: number;
 }
 
 /** Preferred name for a collected media item (image, video, or audio). */
@@ -153,6 +157,15 @@ export interface HistoryEntry {
   /** chrome.downloads id — enables "open file" / "reveal in folder". Absent on
    *  entries recorded before this was tracked, and on failed downloads. */
   downloadId?: number;
+  /** See ImageInfo.expiresAt. History is the longest-lived holder of a signed
+   *  URL, so this is where a lapsed lease shows up first. */
+  expiresAt?: number;
+  /** Resolver-supplied cross-rendition identity (`fb:<fbid>`, `ig:<pk>`), kept
+   *  so a restored backup can be matched back to freshly-collected media. */
+  mediaKey?: string;
+  /** This entry came from a backup whose `src` had its signing tokens stripped
+   *  on export — the URL is no longer a working download target. */
+  srcRedacted?: boolean;
 }
 
 export interface FavouriteEntry {
@@ -163,6 +176,10 @@ export interface FavouriteEntry {
   sourcePageUrl: string;
   sourcePageTitle?: string;
   time: number;
+  /** See HistoryEntry.expiresAt / mediaKey / srcRedacted. */
+  expiresAt?: number;
+  mediaKey?: string;
+  srcRedacted?: boolean;
 }
 
 export type ExcludedKind = 'url' | 'host';
@@ -269,6 +286,19 @@ export type ResolveCredentialScope = 'sankaku-session';
 
 export interface ResolveOriginalsResponse {
   resolved: Record<string, ResolvedMedia>;
+}
+
+/** Popup → background: ask the CDN for each item's real size and content type
+ *  (a HEAD, or a one-byte ranged GET). Explicit and user-initiated — collection
+ *  itself never issues a request. */
+export interface ProbeMediaMetaMessage {
+  type: 'PROBE_MEDIA_META';
+  srcs: string[];
+}
+
+export interface ProbeMediaMetaResponse {
+  /** Keyed by src. `ok:false` means the CDN would not serve it. */
+  meta: Record<string, { ok: boolean; bytes?: number; type?: string }>;
 }
 
 /** Content → background: mp4/HLS URLs the page's own API responses exposed, per tab.
@@ -640,6 +670,7 @@ export type ChromeMessage =
   | DeepScanAbortMessage
   | DeepScanProgress
   | ResolveOriginalsMessage
+  | ProbeMediaMetaMessage
   | XMediaSeenMessage
   | PassiveSnifferSeenMessage
   | GetPassiveSnifferSnapshotMessage

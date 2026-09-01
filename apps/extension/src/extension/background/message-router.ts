@@ -2,6 +2,7 @@ import {
   ChromeMessage,
   DownloadResponse,
   ResolveOriginalsResponse,
+  ProbeMediaMetaResponse,
   CaptureStreamResponse,
   SettingsData,
   ListVariantsResult,
@@ -13,9 +14,6 @@ import {
   ListOpenTabsResponse,
 } from '@mbd/core/types';
 import { filterImagesBySettings, filterExcluded } from '@mbd/core/collection/filters';
-import { buildDownloadFilename } from '@mbd/core/collection/download-name';
-import { partitionByDownloaded, uniquifyBatchNames } from '@mbd/core/collection/download-dedupe';
-import { downloadedOnDiskKeys } from '@/extension/background/download/downloaded-keys';
 import { textToBase64 } from '@mbd/core/download/base64';
 import { buildMediaSidecar, serializeSidecar } from '@mbd/core/download/metadata-sidecar';
 import { recordDownloads, removeEntry, clearHistory, restoreHistory, loadHistory, srcsStillOnDisk, DiskState } from '@mbd/storage/history';
@@ -27,15 +25,18 @@ import { streamErrorMessage } from '@mbd/core/download/stream/stream-error-messa
 import { isMasterPlaylist } from '@mbd/core/download/stream/hls';
 import { variantsFromMaster, variantsFromMpd } from '@mbd/core/download/stream/variants';
 import { assertSafeCaptureUrl } from '@mbd/core/download/stream/ssrf-guard';
+import { probeMediaMetaBatch } from '@mbd/core/net/size-probe';
+import { retryingFetch } from '@mbd/core/net/retry';
 import { readBoundedText } from '@mbd/core/download/stream/bounded-fetch';
 import { MANIFEST_MAX_BYTES } from '@mbd/core/download/stream/capture-constants';
 import {
-  enqueueDownloads, pauseQueue, resumeQueue, cancelQueue, retryQueueItem,
+  pauseQueue, resumeQueue, cancelQueue, retryQueueItem,
   clearFinishedQueue, retryAllFailedQueue, openQueueItem,
 } from '@/extension/background/download/download-queue';
+import { enqueueMedia } from '@/extension/background/download/enqueue-media';
 import { scheduleSidecar } from '@/extension/background/download/sidecar-writer';
 import { platform } from '@/extension/platform';
-import type { HistoryDraft, EnqueueEntry, QueueState } from '@mbd/storage/download-queue';
+import type { QueueState } from '@mbd/storage/download-queue';
 import {
   currentPrivacy,
   currentSettings,
@@ -62,7 +63,7 @@ import { collectOpenTabs, listOpenTabs } from '@/extension/shared/active-tab/col
 
 /** Response callback shape for the background message router. */
 export type SendResponse = (
-  response: DownloadResponse | MutationResponse | ResolveOriginalsResponse | string[] | CaptureStreamResponse | QueueState | SettingsData | PrivacyPreferences | ListVariantsResult | PassiveSnifferSnapshot | ListOpenTabsResponse | CollectOpenTabsResponse,
+  response: DownloadResponse | MutationResponse | ResolveOriginalsResponse | ProbeMediaMetaResponse | string[] | CaptureStreamResponse | QueueState | SettingsData | PrivacyPreferences | ListVariantsResult | PassiveSnifferSnapshot | ListOpenTabsResponse | CollectOpenTabsResponse,
 ) => void;
 
 /** Push the current settings to every tab's content script so the on-page bubble
@@ -93,6 +94,12 @@ export function broadcastSettings(settings: SettingsData): void {
 /** The object-shaped ChromeMessages (those with a discriminating `type`); the
  *  union also carries bare-string messages (GET_IMAGES, …) handled elsewhere. */
 type ObjectMessage = Extract<ChromeMessage, { type: string }>;
+
+/** Bounds on the explicit size/type probe: one request per item, so a huge
+ *  gallery must not turn one click into a thousand parallel requests. */
+const PROBE_CAP = 400;
+const PROBE_CONCURRENCY = 6;
+const PROBE_TIMEOUT_MS = 10_000;
 
 /** Popup status for a queued batch, including any skipped-as-duplicate count. */
 function queuedSkipMessage(queued: number, skipped: number): string {
@@ -145,35 +152,9 @@ export const messageRouter: MessageRouter = {
           ? images
           : filterExcluded(filterImagesBySettings(images, currentSettings), excludedCache);
 
-        let skipped = 0;
-        let toDownload = eligible;
-        if (!message.explicit && currentSettings.skipDuplicateDownloads) {
-          const onDiskKeys = await downloadedOnDiskKeys();
-          const part = partitionByDownloaded(eligible, onDiskKeys);
-          toDownload = part.keep;
-          skipped = part.skipped.length;
-        }
-
-        const paths = uniquifyBatchNames(
-          toDownload.map((image, index) => buildDownloadFilename(image, index, currentSettings, sourcePage?.url)),
-        );
-        const capturedAt = new Date().toISOString();
-        const entries: EnqueueEntry[] = toDownload.map((image, i) => {
-          const filename = paths[i];
-          const history: HistoryDraft = {
-            src: image.src,
-            filename: filename.split('/').pop() ?? filename,
-            kind: image.kind,
-            type: image.type,
-            thumbnailSrc: image.thumbnailSrc ?? image.poster ?? image.src,
-            sourcePageUrl: image.sourcePage?.url ?? sourcePage?.url ?? '',
-            sourcePageTitle: image.sourcePage?.title ?? sourcePage?.title,
-          };
-          const entry: EnqueueEntry = { url: image.src, filename, history };
-          if (currentSettings.metadataSidecar) entry.sidecar = serializeSidecar(buildMediaSidecar(image, image.sourcePage ?? sourcePage, capturedAt));
-          return entry;
+        const { queued, skipped } = await enqueueMedia(eligible, sourcePage, {
+          skipDuplicates: !message.explicit && currentSettings.skipDuplicateDownloads,
         });
-        const queued = await enqueueDownloads(entries);
         respond({ status: 'success', message: queuedSkipMessage(queued, skipped) });
       } catch (e) {
         respond({ status: 'error', message: `Queue failed: ${e instanceof Error ? e.message : 'unknown error'}` });
@@ -424,6 +405,14 @@ export const messageRouter: MessageRouter = {
     };
     if (sender.tab?.id != null) run(sender.tab.id);
     else chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => run(tabs[0]?.id));
+    return true;
+  },
+
+  PROBE_MEDIA_META: (message, _sender, respond) => {
+    const srcs = [...new Set(message.srcs)].slice(0, PROBE_CAP);
+    void probeMediaMetaBatch(srcs, { fetch: retryingFetch(fetch, { maxAttempts: 2, timeoutMs: PROBE_TIMEOUT_MS }) }, PROBE_CONCURRENCY)
+      .then((meta) => respond({ meta }))
+      .catch(() => respond({ meta: {} }));
     return true;
   },
 

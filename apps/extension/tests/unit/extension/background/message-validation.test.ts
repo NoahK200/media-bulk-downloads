@@ -27,6 +27,18 @@ describe('background message validation', () => {
     expect(isValidBackgroundMessage({ ...base, credentialScopes: ['sankaku-session', 'sankaku-session'] })).toBe(false);
   });
 
+  it('accepts bounded HTTP metadata probes and rejects active schemes or oversized batches', () => {
+    expect(isValidBackgroundMessage({
+      type: 'PROBE_MEDIA_META',
+      srcs: ['https://cdn.example/a.jpg', 'http://192.168.0.1/private.jpg'],
+    })).toBe(true);
+    expect(isValidBackgroundMessage({ type: 'PROBE_MEDIA_META', srcs: ['javascript:alert(1)'] })).toBe(false);
+    expect(isValidBackgroundMessage({
+      type: 'PROBE_MEDIA_META',
+      srcs: Array.from({ length: 401 }, (_, i) => `https://cdn.example/${i}.jpg`),
+    })).toBe(false);
+  });
+
   it('rejects oversized text/base64 transfers and malformed sniffer pairs', () => {
     expect(isValidBackgroundMessage({
       type: 'DOWNLOAD_TEXT', filename: 'x.txt', mime: 'text/plain', text: 'x'.repeat(10 * 1024 * 1024 + 1),

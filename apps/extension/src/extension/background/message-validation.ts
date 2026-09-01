@@ -70,6 +70,9 @@ export function isValidBackgroundMessage(value: unknown): value is Record<string
         || (Array.isArray(value.credentialScopes)
           && value.credentialScopes.length <= 1
           && value.credentialScopes.every((scope) => scope === 'sankaku-session')));
+    case 'PROBE_MEDIA_META': return Array.isArray(value.srcs)
+      && value.srcs.length <= 400
+      && value.srcs.every((src) => shortString(src) && /^https?:\/\//i.test(src));
     case 'CAPTURE_STREAM': return shortString(value.runId, 128)
       && validMedia(value.item)
       && isObject(value.sourcePage)

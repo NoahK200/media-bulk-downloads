@@ -150,7 +150,7 @@ describe('instagramPageMedia — opened single post/reel page', () => {
 });
 
 describe('instagramResolver.resolve — reels tab (cover-only clips)', () => {
-  it('resolves a reels-grid cell (background-image inside a /reel/ link) to a pending video', () => {
+  it('does not collect a reels-grid cell that is cover-only (no mp4 seen yet)', () => {
     hydrate({
       code: 'RL',
       media_type: 2,
@@ -160,12 +160,10 @@ describe('instagramResolver.resolve — reels tab (cover-only clips)', () => {
     const el = document.getElementById('bg')!;
     const out = instagramResolver.resolve(u(`${CDN}/RL_cover_n.jpg`), { el, allowNetwork: false, pageUrl: 'https://www.instagram.com/rashmiix/reels/' });
 
-    expect(out).toEqual([
-      { url: `${CDN}/RL_cover_n.jpg`, kind: 'video', ext: 'mp4', width: 640, height: 1136, poster: `${CDN}/RL_cover_n.jpg`, unresolvedVideo: true },
-    ]);
+    expect(out).toEqual([]);
   });
 
-  it('upgrades a reel to its real mp4 once the sniffer has seen it (drops the pending cover)', () => {
+  it('resolves a reel to its real mp4 once the sniffer has seen it (cover-only never collected)', () => {
     hydrate({ code: 'RL', media_type: 2, image_versions2: { candidates: [{ url: `${CDN}/RL_cover_n.jpg`, width: 640, height: 1136 }] } });
     ingestSniffedIgMedia([
       { code: 'RL', kind: 'video', url: `${CDN}/RL_720.mp4`, ext: 'mp4', width: 720, height: 1280, poster: `${CDN}/RL_cover_n.jpg` },
@@ -252,12 +250,11 @@ describe('ingestSniffedIgMedia — untrusted-input validation & edge cases', () 
     expect(c.height).toBeUndefined();
   });
 
-  it('honours a sniffed pending flag -> a cover-only pending video', () => {
+  it('drops a sniffed cover-only (pending) video entry — a poster is not downloadable', () => {
     ingestSniffedIgMedia([
       { code: 'PEND', kind: 'video', url: `${CDN}/PEND_cover_n.jpg`, ext: 'mp4', width: 640, height: 1136, poster: `${CDN}/PEND_cover_n.jpg`, pending: true },
     ]);
-    const [c] = resolveCode('PEND');
-    expect(c).toMatchObject({ kind: 'video', ext: 'mp4', unresolvedVideo: true, poster: `${CDN}/PEND_cover_n.jpg` });
+    expect(resolveCode('PEND')).toEqual([]);
   });
 
   it('when every sniffed entry is rejected (host-pinning), the store stays empty (no crash)', () => {
@@ -333,5 +330,33 @@ describe('Bug fix: push loop handles very large arrays (no RangeError)', () => {
     hydrate({ code: 'BIGCAP', media_type: 8, carousel_media });
     expect(() => instagramPageMedia('https://www.instagram.com/x/p/BIGCAP/')).not.toThrow();
     expect(instagramPageMedia('https://www.instagram.com/x/p/BIGCAP/')).toHaveLength(4000);
+  });
+});
+
+describe('instagram mediaKey fallback (rotating-CDN dedupe)', () => {
+  beforeEach(() => { __resetIgResolver(); });
+
+  it('derives a mediaKey from the CDN filename when the entry carries no pk', () => {
+    document.body.innerHTML = '<a href="/p/CODE1/"><img id="t" src="https://scontent.cdninstagram.com/v/t51/thumb.jpg"></a>';
+    ingestSniffedIgMedia([
+      { code: 'CODE1', kind: 'image', url: 'https://scontent.cdninstagram.com/v/t51.2885-15/499123456_1_n.jpg', ext: 'jpg' },
+    ]);
+    const [cand] = instagramResolver.resolve(
+      new URL('https://scontent.cdninstagram.com/v/t51/thumb.jpg'),
+      { el: document.getElementById('t') as Element, pageUrl: 'https://www.instagram.com/p/CODE1/', allowNetwork: false },
+    );
+    expect(cand.mediaKey).toBe('ig:499123456');
+  });
+
+  it('still prefers the explicit pk when the entry has one', () => {
+    document.body.innerHTML = '<a href="/p/CODE2/"><img id="t2" src="https://scontent.cdninstagram.com/v/t51/thumb.jpg"></a>';
+    ingestSniffedIgMedia([
+      { code: 'CODE2', kind: 'image', url: 'https://scontent.cdninstagram.com/v/t51/999_1_n.jpg', ext: 'jpg', key: '42_7' },
+    ]);
+    const [cand] = instagramResolver.resolve(
+      new URL('https://scontent.cdninstagram.com/v/t51/thumb.jpg'),
+      { el: document.getElementById('t2') as Element, pageUrl: 'https://www.instagram.com/p/CODE2/', allowNetwork: false },
+    );
+    expect(cand.mediaKey).toBe('ig:42_7');
   });
 });

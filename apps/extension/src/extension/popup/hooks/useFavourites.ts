@@ -49,6 +49,8 @@ export function useFavourites(
       time: Date.now(),
       ...(image.thumbnailSrc ?? image.poster ? { thumbnailSrc: image.thumbnailSrc ?? image.poster } : {}),
       ...(sourcePage.title ? { sourcePageTitle: sourcePage.title } : {}),
+      ...(image.expiresAt !== undefined ? { expiresAt: image.expiresAt } : {}),
+      ...(image.mediaKey ? { mediaKey: image.mediaKey } : {}),
     };
     const response = await sendMutationMessage({ type: 'ADD_FAVOURITE', entry });
     if (response.status === 'error') { onError?.(response.message); return; }

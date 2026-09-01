@@ -45,21 +45,95 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capture core, so audio-only capture and MP3 transcode behave identically
   everywhere. The "Capture video streams" toggle and quality selector appear
   wherever a capture host is available.
+- **Structured data is now a collection source.** Publishers declare the
+  full-resolution file in schema.org JSON-LD (`ImageObject`/`VideoObject`
+  `contentUrl`) and microdata for search engines, while the page itself often
+  shows only a resized copy. Those originals are now collected — no extra
+  requests, and it works on any site that ships the markup.
+- **Media in `<object>`, `<embed>`, `<input type="image">` and inline SVG
+  `<image>` is collected.** Previously only `<img>`, `<picture>`, `<video>`,
+  `<audio>`, links and iframes were scanned.
+- **"Check sizes" — real file sizes and formats on request.** A new button asks
+  each CDN how big an item actually is (and what it actually is) with one small
+  request per item, so the size column, the size sort and the size filter work
+  on remote media instead of showing nothing. Opt-in per click; collection still
+  makes no network requests.
+- **Expiring links are now recognised as expiring.** Media served from a signed
+  CDN — Facebook/Instagram (`oh`/`oe`), CloudFront, presigned S3/GCS, Akamai
+  token-auth — carries a built-in expiry. Collection now reads that expiry off
+  the URL and carries it through the grid, History, Favourites and the download
+  queue. A queued item whose link has expired fails immediately with "Link
+  expired" instead of spending three attempts and backoff on a guaranteed 403,
+  and History/Favourites show a placeholder with a "collect it again" hint rather
+  than a broken image and a dead re-download button.
 
 ### Fixed
-- **Safari queues no longer stall on synthetic download ids.** Anchor downloads
-  complete as explicitly untracked dispatches, so later queue entries continue
-  and unsupported file actions remain hidden.
+- **Safari download controls no longer offer unsupported actions.** Reveal and
+  cancel actions stay hidden where Safari's anchor-download fallback cannot
+  provide them.
 - **Corrupt settings and failed storage writes no longer masquerade as success.**
   Every setting is runtime-validated, backups are bounded and versioned, and
   queue/history/favourite/blocklist failures are surfaced to the user.
+- **Instagram and Facebook no longer show videos as un-downloadable poster tiles.**
+  A reel or video that had only its cover image (no playable video URL seen yet) was
+  collected as a "video" whose file was actually the poster — a placeholder that
+  filled the grid but could never be downloaded. These cover-only clips are now
+  skipped; the video is collected once its real progressive `.mp4` is seen
+  (open/play it, or scroll the reels feed).
+- **HEIC, HEIF, JPEG XL, TIFF, JPEG 2000 and APNG images are saved correctly.**
+  They were all written to disk as `.jpg` — the right bytes under a name that
+  broke every viewer — because four separate format lists in the code disagreed
+  about which extensions exist. The format filter also offered HEIC/HEIF/JXL
+  chips that could never match anything; they work now.
+- **The best `srcset` candidate is chosen correctly.** A candidate with no
+  descriptor is 1x, but it was scored as 0, so markup like
+  `full.jpg, half.jpg 0.5x` picked the *smaller* image.
+- **The minimum-size filter now applies to `srcset` alternates.** Only the
+  rendition the browser had painted carried dimensions, so every alternate,
+  `<picture>` source and `<noscript>` fallback slipped past the size filter
+  unmeasured. Each candidate now carries the intrinsic width its `w` descriptor
+  declares.
+- **`<noscript>` fallbacks are read properly.** That block is where lazy loaders
+  put the un-lazy full-size URL, but only `src` and `srcset` on an `<img>` were
+  read — `data-src` and `<picture><source>` inside it were ignored.
 - **No more broken-image boxes in the grid or preview.** When a thumbnail can't
-  render in the popup (e.g. a signed Facebook/Instagram original that the CDN
-  won't serve to the extension without the page's referer), the tile now shows a
-  clean placeholder and the preview modal shows a short "can't preview here — the
-  original still downloads" note, instead of a broken box. The item is **never
-  hidden or dropped** — it stays fully downloadable. Images also fall back to a
-  smaller/on-page variant before giving up.
+  render in the popup, the tile now shows a clean placeholder and the preview
+  modal explains why, instead of a broken box. The item is **never hidden or
+  dropped**. Images also fall back to a smaller/on-page variant before giving up.
+- **The popup no longer claims an unpreviewable image "still downloads
+  correctly".** That was inherited from a wrong diagnosis: Facebook/Instagram
+  media is not referer-locked (a signed URL serves from any origin with no
+  referer and no cookies) — it expires. The copy now says what is actually true,
+  and an expired item says so outright.
+- **Keyboard-shortcut and context-menu downloads are no longer reported as
+  successful when they fail.** Both used to record a history entry the moment the
+  browser handed back a download id, so a download that started and then 403'd
+  was written to history as a success and the completion toast counted it. Both
+  now go through the same download queue as the popup, which reports the real
+  outcome.
+- **Downloads finally complete on Safari.** The Safari backend returned a
+  constant download id and never emitted a completion event, so the queue's
+  poller spun forever and every item was re-issued on each background restart
+  until it hit the retry limit and was marked failed. It now tracks real ids and
+  reports completion.
+- **Exported backups no longer carry live Facebook/Instagram signing tokens.**
+  The export sanitizer didn't recognise `oh`, `oe` or the `_nc_*` session
+  parameters, so a shared or synced backup file leaked them. They are stripped
+  now, and the affected entries are marked so a restored copy shows the
+  "collect it again" hint instead of silently failing to re-download.
+- **"Copy links" / "Export links" hand back working URLs.** They ran through the
+  same sanitizer, which strips the signature a signed URL needs — the copied link
+  was dead on arrival. That surface exists to give the user a usable link, so it
+  now uses the URL as-is; backups, metadata sidecars and the yt-dlp command still
+  strip.
+- **Fewer duplicate Instagram tiles.** The per-slide dedupe key was only set when
+  Instagram's payload happened to include a `pk`; it now falls back to the media
+  id in the CDN filename, so a photo served from two rotating edges still folds
+  to one tile.
+- **A `&amp;`-escaped Facebook/Instagram URL is no longer stored.** Lifted
+  straight out of HTML, it parses fine but points at a permanently-403 URL
+  (every parameter after the first is named `amp;…`). Such URLs are now rejected
+  at the sniffer boundary rather than saved as a silently dead link.
 - **Fewer duplicate tiles on Facebook & Instagram.** The same photo served at two
   signed/rotating CDN URLs (page hydration vs. the scroll API, or a rotating edge
   host) used to appear as two grid tiles. Collection now dedupes by each media's

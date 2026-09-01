@@ -19,9 +19,10 @@ export interface DownloadRequest {
   conflictAction?: 'uniquify' | 'overwrite' | 'prompt';
 }
 
-/** Starting a download is tracked on browsers with a downloads API and
- * untracked on Safari's anchor-download fallback. Failure is explicit so callers
- * never confuse a missing id with a successful untracked dispatch. */
+/** Starting a download is tracked whenever the backend can expose a stable
+ * lifecycle id, including Safari's bounded anchor-download registry. The
+ * untracked case remains available for capability-degraded backends, and
+ * failure is explicit so callers never confuse a missing id with success. */
 export type DownloadStartResult =
   | { kind: 'tracked'; id: number }
   | { kind: 'untracked' }

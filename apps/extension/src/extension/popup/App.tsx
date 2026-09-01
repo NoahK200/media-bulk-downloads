@@ -23,7 +23,8 @@ import TabPickerPanel from '@/extension/popup/components/panels/TabPickerPanel';
 import { deriveFilterOptions } from '@mbd/core/collection/filters';
 import { deepScanActiveTab, abortDeepScanActiveTab } from '@/extension/shared/active-tab/deep-scan-active-tab';
 import { hostFromUrl, registrableDomain } from '@mbd/core/collection/paths';
-import { Cog6ToothIcon, ArrowPathIcon, ChevronDoubleDownIcon, ClockIcon, XMarkIcon, StarIcon, VideoCameraIcon, NoSymbolIcon, Square2StackIcon } from '@heroicons/react/24/outline';
+import { sendMutationMessage } from '@/extension/popup/utils';
+import { Cog6ToothIcon, ArrowPathIcon, ChevronDoubleDownIcon, ClockIcon, XMarkIcon, StarIcon, VideoCameraIcon, NoSymbolIcon, Square2StackIcon, ScaleIcon } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { downloadable, pendingVideos } from '@/extension/popup/lib/appHelpers';
 import { useDownloadHistory } from '@/extension/popup/hooks/useDownloadHistory';
@@ -36,7 +37,6 @@ import { useNearDuplicates } from '@/extension/popup/hooks/useNearDuplicates';
 import { useDownloadActions, StreamRefusal } from '@/extension/popup/hooks/useDownloadActions';
 import { usePerHostSettings } from '@/extension/popup/hooks/usePerHostSettings';
 import { usePrivacy } from '@/extension/popup/hooks/usePrivacy';
-import { sendMutationMessage } from '@/extension/popup/utils';
 
 const App: React.FC<AppProps> = ({
   collect = collectFromActiveTab,
@@ -137,6 +137,8 @@ const App: React.FC<AppProps> = ({
     handleFetchVideo,
     handleFetchAllVideos,
     fetchingAllVideos,
+    handleProbeSizes,
+    probingSizes,
     fetchingSrcs,
     resolveFailedSrcs,
     rawImagesRef,
@@ -259,6 +261,11 @@ const App: React.FC<AppProps> = ({
   const pendingVids = pendingVideos(state.filteredImages);
   const pendingVideoCount = pendingVids.length;
   const fetchingVideos = fetchingAllVideos;
+  // Remote items whose real size collection could not know (fileSize stays 0 for
+  // everything but a data: URI).
+  const unsizedCount = state.filteredImages.filter(
+    (i) => i.fileSize === 0 && /^https?:/i.test(i.src),
+  ).length;
   const hasImages = total > 0;
   const filtered = shown !== total;
   // Grid empty only because filters hid everything (not because the page has no media).
@@ -541,6 +548,17 @@ const App: React.FC<AppProps> = ({
             >
               <VideoCameraIcon className={`mbd:h-4 mbd:w-4 ${fetchingVideos ? 'mbd:animate-pulse' : ''}`} />
               <span>{fetchingVideos ? 'Fetching…' : `Get all videos (${pendingVideoCount})`}</span>
+            </button>
+          )}
+          {unsizedCount > 0 && (
+            <button
+              onClick={() => void handleProbeSizes()}
+              disabled={probingSizes}
+              className="btn btn-ghost mbd:flex-none"
+              title="Ask each CDN for the real file size and type (one small request per item)"
+            >
+              <ScaleIcon className={`mbd:h-4 mbd:w-4 ${probingSizes ? 'mbd:animate-pulse' : ''}`} />
+              <span>{probingSizes ? 'Checking…' : `Check sizes (${unsizedCount})`}</span>
             </button>
           )}
           {selectedCount > 0 ? (
